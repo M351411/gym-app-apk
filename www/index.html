@@ -296,19 +296,78 @@ function render(){
  ta.oninput=()=>{sess().note=ta.value;save()};ta.onchange=()=>mark("s_"+sk());
  app.appendChild(nt);
 }
+// ===== InBody / body composition =====
+const BFIELDS=[["w","الوزن (كجم)"],["m","العضل الهيكلي SMM (كجم)"],["f","نسبة الدهون PBF (%)"],["bfm","كتلة الدهون (كجم)"],["tbw","ماء الجسم (لتر)"],["bmr","معدل الحرق BMR (سعر)"],["vfl","الدهون الحشوية (مستوى)"],["score","درجة InBody"]];
+const BADV=[["ffm","الكتلة الخالية من الدهون (كجم)"],["pro","البروتين (كجم)"],["min","المعادن (كجم)"],["whr","نسبة الخصر للورك"],["tgt","الوزن المثالي حسب الجهاز (كجم)"],["fc","التحكم في الدهون (كجم)"]];
+const SEGN=[["la","ذراع شمال"],["ra","ذراع يمين"],["tr","الجذع"],["ll","رجل شمال"],["rl","رجل يمين"]];
+const RGL={w:"الوزن",bfm:"كتلة الدهون",ffm:"الكتلة الخالية من الدهون",tbw:"ماء الجسم",pro:"البروتين",min:"المعادن",bmr:"معدل الحرق",whr:"الخصر/الورك",vfl:"الدهون الحشوية"};
+const TRK=[["w","الوزن","كجم"],["f","دهون %","%"],["m","العضل","كجم"],["bfm","كتلة الدهون","كجم"],["ffm","خالي الدهون","كجم"],["bmr","BMR","سعر"],["vfl","حشوية","مستوى"]];
+let BD={};
+function bodyWarn(e){const w=[],n=k=>+e[k]||0;
+ if(n("w")&&n("pro")&&n("min")&&n("bfm")&&n("tbw")){const s=n("pro")+n("min")+n("bfm")+n("tbw");if(Math.abs(s-n("w"))>1.5)w.push("مجموع الماء والبروتين والمعادن والدهون ("+Math.round(s*10)/10+") مش بيطابق الوزن ("+n("w")+"). راجع الأرقام.")}
+ if(n("w")&&n("bfm")&&n("f")&&Math.abs(n("bfm")/n("w")*100-n("f"))>0.8)w.push("كتلة الدهون ÷ الوزن بتدّي "+Math.round(n("bfm")/n("w")*1000)/10+"% ومش بتطابق نسبة الدهون "+n("f")+"%.");
+ if(n("w")&&n("bfm")&&n("ffm")&&Math.abs(n("w")-n("bfm")-n("ffm"))>1)w.push("الوزن − الدهون مش بيساوي الكتلة الخالية من الدهون. راجع الأرقام.");
+ if(n("m")&&n("ffm")&&n("m")>n("ffm"))w.push("العضل الهيكلي أكبر من الكتلة الخالية من الدهون، وده مش منطقي.");
+ if(n("w")&&(n("w")<30||n("w")>250))w.push("الوزن غريب. راجع الرقم.");
+ if(n("f")&&(n("f")<3||n("f")>60))w.push("نسبة الدهون غريبة. راجع الرقم.");
+ return w}
+function bodyFromAI(r){const e={},put=(k,v)=>{if(v!=null&&v!==""&&!isNaN(+v))e[k]=+v};
+ put("w",r.weight_kg);put("m",r.skeletal_muscle_mass_kg);put("f",r.body_fat_percent);put("bfm",r.body_fat_mass_kg);put("ffm",r.fat_free_mass_kg);put("tbw",r.total_body_water_l);put("pro",r.protein_kg);put("min",r.minerals_kg);put("bmr",r.bmr_kcal);put("vfl",r.visceral_fat_level);put("whr",r.waist_hip_ratio);put("score",r.inbody_score);put("tgt",r.target_weight_kg);put("fc",r.fat_control_kg);put("mc",r.muscle_control_kg);put("bmi",r.bmi);put("obd",r.obesity_degree_percent);put("h",r.height_cm);
+ const mp={la:"left_arm",ra:"right_arm",tr:"trunk",ll:"left_leg",rl:"right_leg"},sl=r.segmental_lean_kg||{},sf=r.segmental_fat_kg||{},sp=r.segmental_lean_percent||{};
+ e.sl={};e.sf={};e.sp={};
+ Object.keys(mp).forEach(k=>{if(sl[mp[k]]!=null)e.sl[k]=+sl[mp[k]];if(sf[mp[k]]!=null)e.sf[k]=+sf[mp[k]];if(sp[mp[k]]!=null)e.sp[k]=+sp[mp[k]]});
+ e.rg=r.ranges||{};
+ const d=String(r.test_date||"").replace(/\./g,"-").replace(/\s.*$/,"").replace(/-$/,"");
+ if(/^\d{4}-\d{1,2}-\d{1,2}$/.test(d)){const q=d.split("-");e.d=q[0]+"-"+p2(q[1])+"-"+p2(q[2])}
+ return e}
+const INBODY_PROMPT='Read this InBody body composition result sheet. Return JSON only with exactly these keys (numbers, or null if not printed; never guess): {"test_date":"YYYY-MM-DD","height_cm":number,"weight_kg":number,"total_body_water_l":number,"protein_kg":number,"minerals_kg":number,"body_fat_mass_kg":number,"fat_free_mass_kg":number,"skeletal_muscle_mass_kg":number,"body_fat_percent":number,"bmi":number,"bmr_kcal":number,"waist_hip_ratio":number,"visceral_fat_level":number,"obesity_degree_percent":number,"inbody_score":number,"target_weight_kg":number,"fat_control_kg":number,"muscle_control_kg":number,"segmental_lean_kg":{"left_arm":number,"right_arm":number,"trunk":number,"left_leg":number,"right_leg":number},"segmental_lean_percent":{"left_arm":number,"right_arm":number,"trunk":number,"left_leg":number,"right_leg":number},"segmental_fat_kg":{"left_arm":number,"right_arm":number,"trunk":number,"left_leg":number,"right_leg":number},"ranges":{"w":[low,high],"bfm":[low,high],"ffm":[low,high],"tbw":[low,high],"pro":[low,high],"min":[low,high],"bmr":[low,high],"whr":[low,high],"vfl":[low,high]}} where ranges are the normal ranges printed in brackets next to each value. The Left and Right labels on the body diagram refer to the person\'s left and right sides as printed. Ignore any personal identifiers (name, ID number, phone numbers, addresses); do not output them.';
+function rstat(k,v,rg){if(!rg||!rg[k]||rg[k].length<2||!(v>0))return"";const a=rg[k][0],b=rg[k][1];return v<a?"أقل من المعدل":v>b?"أعلى من المعدل":"ضمن المعدل"}
 function bodyView(app){
- const B=S.body.slice().sort((a,b)=>a.d<b.d?-1:1),L=B[B.length-1]||{};
- let t='<div class="ex"><div class="nm">سجل الجسم و InBody</div><div class="grid" style="margin-top:8px"><input type="date" id="bd" value="'+today()+'"><input inputmode="decimal" id="bw" placeholder="الوزن كجم"><input inputmode="decimal" id="bm" placeholder="كتلة عضلية كجم"><input inputmode="decimal" id="bf" placeholder="دهون %"></div><input id="bn" style="margin-top:8px;text-align:right" placeholder="ملاحظة (اختياري)"><button class="btn g" id="ib">صوّر ورقة الـ InBody (ملء تلقائي)</button><div class="meta" id="ibm"></div><button class="btn" id="bs">احفظ القياس</button></div>';
- const ws=B.filter(x=>x.w);
- t+='<div class="ex"><div class="nm">منحنى الوزن</div>'+chart(ws.map(x=>+x.w))+(L.w?'<div class="meta">آخر قياس: '+L.d+' · '+L.w+' كجم'+(L.m?' · عضل '+L.m+' كجم':'')+(L.f?' · دهون '+L.f+'%':'')+'</div>':'')+'</div>';
- if(B.length>1){const m=B.filter(x=>x.m);if(m.length>1)t+='<div class="ex"><div class="nm">الكتلة العضلية</div>'+chart(m.map(x=>+x.m))+'</div>'}
- t+='<div class="ex"><div class="nm">آخر القياسات</div>'+(B.length?B.slice().reverse().slice(0,10).map(x=>'<div class="row"><span>'+x.d+'</span><span>'+[x.w&&x.w+' كجم',x.m&&'عضل '+x.m,x.f&&'دهون '+x.f+'%'].filter(Boolean).join(" · ")+'</span></div>').join(""):'<p class="meta">لسه مفيش قياسات. أول قياس بيحدد نقطة البداية.</p>')+'</div>';
+ const B=S.body.slice().sort((a,b)=>a.d<b.d?-1:1),L=B.filter(x=>x.w).slice(-1)[0]||{},P=B.filter(x=>x.w).slice(-2,-1)[0];
+ const fv=k=>BD[k]!=null?esc(BD[k]):"";
+ let t='<div class="ex"><div class="nm">قياس جديد</div><button class="btn g" id="ib">📷 صوّر ورقة الـ InBody (ملء تلقائي)</button><div class="meta" id="ibm"></div>';
+ t+='<div class="grid" style="margin-top:8px"><label class="meta">التاريخ<input type="date" id="b_d" value="'+(BD.d||today())+'"></label>'+BFIELDS.map(x=>'<label class="meta">'+x[1]+'<input inputmode="decimal" data-bf="'+x[0]+'" value="'+fv(x[0])+'"></label>').join("")+'</div>';
+ t+='<details><summary>خانات إضافية</summary><div class="grid">'+BADV.map(x=>'<label class="meta">'+x[1]+'<input inputmode="decimal" data-bf="'+x[0]+'" value="'+fv(x[0])+'"></label>').join("")+'</div></details>';
+ t+='<details><summary>تحليل الأطراف والجذع (كجم عضل)</summary><div class="grid">'+SEGN.map(x=>'<label class="meta">'+x[1]+'<input inputmode="decimal" data-bs="'+x[0]+'" value="'+(BD.sl&&BD.sl[x[0]]!=null?esc(BD.sl[x[0]]):"")+'"></label>').join("")+'</div></details>';
+ t+='<div id="bw"></div><button class="btn" id="bs">احفظ القياس</button></div>';
+ if(L.w){
+  const rg=L.rg||{},row=(k,lbl,v,u)=>v>0?'<div class="mrow"><span>'+lbl+'</span><span>'+v+(u?" "+u:"")+(rstat(k,v,rg)?' <span class="meta">· '+rstat(k,v,rg)+'</span>':"")+'</span></div>':"";
+  t+='<div class="ex"><div class="top"><div class="nm" style="flex:1">آخر قياس ('+L.d+')</div>'+(L.score?'<span class="rng">'+L.score+'/100</span>':"")+'</div>'
+   +row("w","الوزن",L.w,"كجم")+row("","العضل الهيكلي",L.m,"كجم")+row("","نسبة الدهون",L.f,"%")+row("bfm","كتلة الدهون",L.bfm,"كجم")+row("ffm","الكتلة الخالية من الدهون",L.ffm,"كجم")+row("tbw","ماء الجسم",L.tbw,"لتر")+row("pro","البروتين",L.pro,"كجم")+row("min","المعادن",L.min,"كجم")+row("bmr","معدل الحرق",L.bmr,"سعر")+row("whr","الخصر/الورك",L.whr,"")+row("vfl","الدهون الحشوية",L.vfl,"")+(L.tgt?row("","الوزن المثالي حسب الجهاز",L.tgt,"كجم"):"");
+  if(L.sl&&Object.keys(L.sl).length)t+='<div class="meta" style="margin-top:8px">الأطراف والجذع (كجم عضل'+(L.sp&&Object.keys(L.sp).length?" · % من المتوقع":"")+')</div><div class="grid">'+SEGN.filter(x=>L.sl[x[0]]!=null).map(x=>'<div class="row"><span>'+x[1]+'</span><span>'+L.sl[x[0]]+(L.sp&&L.sp[x[0]]!=null?" · "+L.sp[x[0]]+"%":"")+'</span></div>').join("")+'</div>';
+  t+='</div>'}
+ const mk=S.bm||"w",mt=TRK.find(x=>x[0]===mk)||TRK[0],vs=B.filter(x=>x[mk]>0);
+ t+='<div class="ex"><div class="nm">التطور</div><div class="seg">'+TRK.map(x=>'<button data-tm="'+x[0]+'" class="'+(x[0]===mk?"on":"")+'">'+x[1]+'</button>').join("")+'</div>'+chart(vs.map(x=>+x[mk]))
+  +(vs.length>1?'<div class="meta">من أول قياس: '+(Math.round((vs[vs.length-1][mk]-vs[0][mk])*10)/10)+' '+mt[2]+(vs.length>2?' · من القياس اللي قبله: '+(Math.round((vs[vs.length-1][mk]-vs[vs.length-2][mk])*10)/10)+' '+mt[2]:"")+'</div>':"")+'</div>';
+ if(L.w&&(L.ffm||L.bfm||L.f)){
+  const ffm=+L.ffm||(L.bfm?L.w-L.bfm:L.w*(1-L.f/100)),tp=+S.prof.tf||(S.prof.sex==="f"?28:20),tw=ffm/(1-tp/100),loss=L.w-tw;
+  t+='<div class="ex"><div class="nm">هدف الدهون</div><label class="meta">نسبة الدهون المستهدفة (%)<input id="tf" inputmode="decimal" value="'+tp+'"></label>';
+  if(loss>0.5)t+='<p>لو حافظت على كتلتك الخالية من الدهون (<b>'+Math.round(ffm*10)/10+' كجم</b>) ونزلت لـ <b>'+tp+'%</b> دهون، وزنك هيبقى حوالي <b>'+Math.round(tw*10)/10+' كجم</b>، يعني نزول حوالي <b>'+Math.round(loss*10)/10+' كجم دهون</b>. بمعدل 0.5% من وزنك في الأسبوع ده حوالي <b>'+Math.round(loss/(L.w*0.005))+' أسبوع</b>.</p><p class="meta">تقدير حسابي بيفترض إنك محافظ على العضل (تمرين مقاومة وبروتين كفاية)، والواقع بيختلف.</p>';
+  else t+='<p class="meta">نسبة دهونك الحالية أقل من أو قريبة من الهدف.</p>';
+  t+='</div>'}
+ t+='<div class="ex"><div class="nm">السجل</div>'+(B.length?B.slice().reverse().slice(0,12).map(x=>'<div class="row"><span>'+x.d+'</span><span>'+[x.w&&x.w+' كجم',x.f&&x.f+'%',x.m&&'عضل '+x.m,x.bfm&&'دهون '+x.bfm].filter(Boolean).join(" · ")+' <button class="x" data-bd="'+x.d+'">حذف</button></span></div>').join(""):'<p class="meta">لسه مفيش قياسات.</p>')+'</div>';
  app.innerHTML=t;
- $("ib").onclick=()=>{const i=document.createElement("input");i.type="file";i.accept="image/*";i.onchange=async()=>{if(!i.files[0])return;$("ibm").textContent="Claude بيقرا الورقة...";try{const r=await ai('Read this InBody body composition printout. Return JSON only: {"weight_kg":number|null,"skeletal_muscle_mass_kg":number|null,"body_fat_percent":number|null}. Use null if not printed. Do not guess.',i.files[0]);if(r.weight_kg)$("bw").value=r.weight_kg;if(r.skeletal_muscle_mass_kg)$("bm").value=r.skeletal_muscle_mass_kg;if(r.body_fat_percent)$("bf").value=r.body_fat_percent;$("ibm").textContent="اتملى. راجع الأرقام قبل الحفظ."}catch(e){$("ibm").textContent=(e&&e.message)||"حصلت مشكلة."}};i.click()};
- $("bs").onclick=()=>{const d=$("bd").value,e={d:d,w:$("bw").value,m:$("bm").value,f:$("bf").value,n:$("bn").value};
-  if(!d||!(e.w||e.m||e.f))return;
-  S.body=S.body.filter(x=>x.d!==d).concat([e]);mark("body");render()}
-}
+ const warn=()=>{const e=readBody(),w=bodyWarn(e);$("bw").innerHTML=w.map(x=>'<p class="warn">'+esc(x)+'</p>').join("")};
+ app.querySelectorAll("[data-bf]").forEach(i=>i.oninput=()=>{BD[i.dataset.bf]=i.value;warn()});
+ app.querySelectorAll("[data-bs]").forEach(i=>i.oninput=()=>{BD.sl=BD.sl||{};BD.sl[i.dataset.bs]=i.value});
+ $("b_d").onchange=()=>BD.d=$("b_d").value;
+ app.querySelectorAll("[data-tm]").forEach(b=>b.onclick=()=>{S.bm=b.dataset.tm;save();render()});
+ if($("tf"))$("tf").onchange=()=>{S.prof.tf=$("tf").value;xmark();render()};
+ app.querySelectorAll("[data-bd]").forEach(b=>b.onclick=()=>{if(b.dataset.c!=="1"){b.dataset.c="1";b.textContent="تأكيد؟";return}S.body=S.body.filter(x=>x.d!==b.dataset.bd);mark("body");render()});
+ $("ib").onclick=()=>{const i=document.createElement("input");i.type="file";i.accept="image/*";i.onchange=async()=>{if(!i.files[0])return;$("ibm").textContent="Claude بيقرا الورقة...";
+  try{const r=await ai(INBODY_PROMPT,i.files[0]);const e=bodyFromAI(r);BD=Object.assign({d:today()},e);$("ibm").textContent="";render();$("ibm").textContent="اتملى. راجع الأرقام قبل الحفظ.";warn()}
+  catch(e){$("ibm").textContent=(e&&e.message)||"حصلت مشكلة. جرّب صورة أوضح."}};i.click()};
+ $("bs").onclick=()=>{const e=readBody();if(!e.w&&!e.f&&!e.m){$("bw").innerHTML='<p class="warn">اكتب الوزن على الأقل.</p>';return}
+  const w=bodyWarn(e);if(w.length&&$("bs").dataset.c!=="1"){$("bs").dataset.c="1";$("bs").textContent="في ملاحظات فوق. اضغط تاني للحفظ رغم كده";warn();return}
+  S.body=S.body.filter(x=>x.d!==e.d).concat([e]);BD={};mark("body");render()};
+ warn()}
+function readBody(){const e={d:BD.d||$("b_d").value||today()};
+ BFIELDS.concat(BADV).forEach(x=>{const v=BD[x[0]];if(v!==""&&v!=null&&!isNaN(+v))e[x[0]]=+v});
+ ["mc","bmi","obd","h"].forEach(k=>{if(BD[k]!=null&&!isNaN(+BD[k]))e[k]=+BD[k]});
+ if(BD.sl){const sl={};Object.keys(BD.sl).forEach(k=>{if(BD.sl[k]!==""&&!isNaN(+BD.sl[k]))sl[k]=+BD.sl[k]});if(Object.keys(sl).length)e.sl=sl}
+ if(BD.sf&&Object.keys(BD.sf).length)e.sf=BD.sf;if(BD.sp&&Object.keys(BD.sp).length)e.sp=BD.sp;if(BD.rg&&Object.keys(BD.rg).length)e.rg=BD.rg;
+ return e}
+
 function net(){$("net").style.display=navigator.onLine?"none":"block"}
 addEventListener("online",()=>{net();flush()});addEventListener("offline",net);net();
 $("akey").value=localStorage.getItem("ak")||"";$("akey").onchange=()=>localStorage.setItem("ak",$("akey").value.trim());
@@ -327,7 +386,7 @@ const LIM={na:1,chol:1};
 const SRC={e:"جدول الأغذية المصري",u:"USDA",s:"USDA أكلات",c:"أكلتي",a:"تقدير AI",l:"ملصق"};
 const MEALS=["فطار","غدا","عشا","سناك"];
 const nz=s=>String(s).toLowerCase().replace(/[\u064B-\u0652\u0640]/g,"").replace(/[أإآ]/g,"ا").replace(/ى/g,"ي").replace(/ة/g,"ه");
-const AR={فول:"fava|broadbean|broad bean|falafel",طعميه:"falafel",فلافل:"falafel",حمص:"hummus|chickpea",عدس:"lentil",ارز:"rice",رز:"rice",عيش:"bread|pita",خبز:"bread|pita",لحمه:"beef",لحم:"beef|meat",كبده:"liver",فراخ:"chicken",دجاج:"chicken",بط:"duck",سمك:"fish",تونه:"tuna",جمبري:"shrimp",بيض:"egg,|eggs,|egg |omelet",لبن:"milk|yogurt",حليب:"milk",زبادي:"yogurt",جبنه:"cheese",جبن:"cheese",قشطه:"cream",زبده:"butter",سمن:"ghee|butter",زيت:"oil",بطاطس:"potato",بطاطا:"sweet potato",طماطم:"tomato",خيار:"cucumber",جزر:"carrot",بصل:"onion",ثوم:"garlic",خس:"lettuce",ملوخيه:"jute|molokhia",سبانخ:"spinach",كرنب:"cabbage",فلفل:"pepper",باذنجان:"eggplant",كوسه:"squash|zucchini",بامي:"okra",بسله:"peas",فاصوليا:"beans",موز:"banana",تفاح:"apple",برتقال:"orange",مانجو:"mango",عنب:"grape",بطيخ:"watermelon",تمر:"dates",زبيب:"raisin",فراوله:"strawberr",جوافه:"guava",رمان:"pomegranate",لوز:"almond",فسدق:"pistachio",جوز:"walnut",سوداني:"peanut",عسل:"honey",سكر:"sugar",شوفان:"oat",مكرونه:"pasta|macaroni",شاي:"tea",قهوه:"coffee",طحينه:"tahini",تين:"fig",كشري:"rice|lentil|pasta",شاورما:"gyro|shawarma",كفته:"meatball|beef",بروتين:"protein",بسبوسه:"cake",كنافه:"pastry",لبنه:"cheese",فطير:"pie|pastry",كباب:"kabob|beef",شوربه:"soup",سلطه:"salad",مشوي:"grilled|broil",مسلوق:"boiled",مقلي:"fried",نيء:"raw",مطبوخ:"cooked"};
+const AR={فول:"fava|broadbean|broad bean|falafel",طعميه:"falafel",فلافل:"falafel",حمص:"hummus|chickpea",عدس:"lentil",ارز:"rice",رز:"rice",عيش:"bread|pita",خبز:"bread|pita",لحمه:"beef",لحم:"beef|meat",كبده:"liver",فراخ:"chicken|دجاج",دجاج:"chicken|فراخ",بط:"duck",سمك:"fish",تونه:"tuna",جمبري:"shrimp",بيض:"egg,|eggs,|egg |omelet",لبن:"milk|yogurt",حليب:"milk",زبادي:"yogurt",جبنه:"cheese",جبن:"cheese",قشطه:"cream",زبده:"butter",سمن:"ghee|butter",زيت:"oil",بطاطس:"potato",بطاطا:"sweet potato",طماطم:"tomato",خيار:"cucumber",جزر:"carrot",بصل:"onion",ثوم:"garlic",خس:"lettuce",ملوخيه:"jute|molokhia",سبانخ:"spinach",كرنب:"cabbage",فلفل:"pepper",باذنجان:"eggplant",كوسه:"squash|zucchini",بامي:"okra",بسله:"peas",فاصوليا:"beans",موز:"banana",تفاح:"apple",برتقال:"orange",مانجو:"mango",عنب:"grape",بطيخ:"watermelon",تمر:"dates",زبيب:"raisin",فراوله:"strawberr",جوافه:"guava",رمان:"pomegranate",لوز:"almond",فسدق:"pistachio",جوز:"walnut",سوداني:"peanut",عسل:"honey",سكر:"sugar",شوفان:"oat",مكرونه:"pasta|macaroni",شاي:"tea",قهوه:"coffee",طحينه:"tahini",تين:"fig",كشري:"rice|lentil|pasta",شاورما:"gyro|shawarma",كفته:"meatball|beef",بروتين:"protein",بسبوسه:"cake",كنافه:"pastry",لبنه:"cheese",فطير:"pie|pastry",كباب:"kabob|beef",شوربه:"soup",سلطه:"salad",مشوي:"grilled|broil",مسلوق:"boiled",مقلي:"fried",نيء:"raw",مطبوخ:"cooked"};
 function lastBody(){const b=S.body.filter(x=>x.w).sort((a,b)=>a.d<b.d?-1:1);return b[b.length-1]||{}}
 function search(q){
  q=nz(q.trim());if(q.length<2)return[];
@@ -346,12 +405,15 @@ function tot(items){const t=KEYS.map(()=>0),h=KEYS.map(()=>0);
  return{t:t,h:h}}
 const iv=(it,k)=>it.p[NI[k]]>=0?it.p[NI[k]]*it.g/100:0;
 function targets(){const P=S.prof,L=lastBody(),w=+P.w||+L.w||0;if(!w)return null;
- const bf=+P.bf||+L.f||0,h=+P.h||175,a=+P.age||25;
- const bmr=bf?370+21.6*w*(1-bf/100):10*w+6.25*h-5*a+(P.sex==="f"?-161:5);
- const tdee=bmr*(+P.act||1.55),g=P.goal||"bulk";
+ const bf=+P.bf||+L.f||0,h=+P.h||+L.h||175,a=+P.age||25,g=P.goal||"bulk";
+ const ffm=+L.ffm||(bf?w*(1-bf/100):0);
+ const bmr=bf&&ffm?370+21.6*ffm:(+L.bmr||10*w+6.25*h-5*a+(P.sex==="f"?-161:5));
+ const tdee=bmr*(+P.act||1.55);
  const kcal=Math.round(tdee*({bulk:1.1,cut:.8,keep:1}[g])/10)*10;
- const pr=Math.round(w*({bulk:2,cut:2.3,keep:2}[g])),fa=Math.round(w*({bulk:1,cut:.8,keep:.9}[g]));
- return{w:w,bmr:Math.round(bmr),tdee:Math.round(tdee),kcal:+P.ok||kcal,p:+P.op||pr,f:+P.of||fa,c:+P.oc||Math.max(0,Math.round((kcal-pr*4-fa*9)/4))}}
+ const pr=ffm?Math.round(ffm*({bulk:2.5,cut:2.8,keep:2.5}[g])):Math.round(w*({bulk:2,cut:2.3,keep:2}[g])),fa=Math.round(w*({bulk:1,cut:.8,keep:.9}[g]));
+ const hi=bf&&bf>(P.sex==="f"?32:25);
+ return{w:w,bmr:Math.round(bmr),tdee:Math.round(tdee),kcal:+P.ok||kcal,p:+P.op||pr,f:+P.of||fa,c:+P.oc||Math.max(0,Math.round((kcal-pr*4-fa*9)/4)),hint:hi&&g==="bulk"?"نسبة دهونك ("+bf+"%) أعلى من المعتاد، فالتضخيم مش الأنسب غالبًا. فكّر في ثبات أو نزول خفيف مع بروتين عالي وتمرين مقاومة. اختار الهدف من تحت.":""}}
+
 function nday(d){return S.nut[d]=S.nut[d]||{items:[],w:0}}
 function shiftDay(d,n){const x=new Date(d+"T12:00:00");x.setDate(x.getDate()+n);return x.getFullYear()+"-"+p2(x.getMonth()+1)+"-"+p2(x.getDate())}
 function nmark(d){mark("n_"+d)}function xmark(){mark("nx")}
@@ -383,7 +445,7 @@ function drawSheet(){
  if(m==="l")h+='<p class="meta">صوّر الجدول الغذائي على العبوة (الخلفية). Claude بيقراه وانت بتراجع قبل الحفظ.</p><button class="btn" id="pick">صوّر أو اختار صورة</button>';
  if(m==="i")h+='<p class="meta">صوّر الأكلة. بيطلع تقدير تقريبي للأصناف والجرامات، وانت تعدّل الجرامات.</p><button class="btn" id="pick">صوّر أو اختار صورة</button>';
  if(m==="t")h+='<textarea id="td" rows="3" placeholder="مثال: طبقين كشري كبير مع دقة وشطة، أو سندوتش شاورما فراخ"></textarea><button class="btn" id="tgo">قدّر بالـ AI</button>';
- if(m==="b")h+='<input id="bcn" inputmode="numeric" placeholder="رقم الباركود" value="'+esc(SH.bc)+'"><button class="btn" id="bgo">دوّر</button><button class="btn g" id="pick">صوّر الباركود</button>';
+ if(m==="b")h+='<input id="bcn" inputmode="numeric" placeholder="رقم الباركود" value="'+esc(SH.bc)+'"><button class="btn" id="bgo">دوّر</button><button class="btn" id="scan">📷 امسح بالكاميرا</button><button class="btn g" id="pick">صوّر الباركود</button>';
  if(m==="m")h+=custForm();
  if(m==="r")h+=drawRec();
  if(SH.busy)h+='<p class="meta">'+esc(SH.busy)+'</p>';
@@ -400,6 +462,8 @@ function wireSheet(){
  const pk=$("pick");if(pk)pk.onclick=()=>{const i=document.createElement("input");i.type="file";i.accept="image/*";i.onchange=()=>i.files[0]&&onPhoto(i.files[0]);i.click()};
  if($("tgo"))$("tgo").onclick=()=>aiFoods($("td").value,null);
  if($("bgo"))$("bgo").onclick=()=>findBc($("bcn").value);
+ if($("scan"))$("scan").onclick=scanCam;
+ c.querySelectorAll("[data-rs]").forEach(e=>e.onchange=()=>{SH.res.items[+e.dataset.rs].sel=+e.value;drawSheet()});
  if($("cfs"))$("cfs").onclick=saveCust;
  c.querySelectorAll("[data-ra]").forEach(b=>b.onclick=()=>{const x=SH.res.items[+b.dataset.ra];x.on=!x.on;drawSheet()});
  if($("raadd"))$("raadd").onclick=addRes;
@@ -440,25 +504,62 @@ async function onPhoto(file){
    SH.busy="";if(!n){SH.msg="مقدرتش أقرا الباركود. اكتب الرقم بإيدك.";return drawSheet()}
    SH.bc=n;return findBc(n)}
   SH.busy="";drawSheet()}catch(e){SH.busy="";SH.msg=(e&&e.message)||"حصلت مشكلة. جرّب تاني.";drawSheet()}}
-function findBc(n){n=String(n||"").replace(/\D/g,"");if(!n){SH.msg="اكتب رقم الباركود.";return drawSheet()}
+async function offLookup(n){
+ try{const r=await fetch("https://world.openfoodfacts.org/api/v2/product/"+n+".json?fields=product_name,product_name_ar,brands,nutriments,serving_quantity");if(!r.ok)return null;
+  const j=await r.json();if(j.status!==1||!j.product)return null;
+  const p=j.product,m=p.nutriments||{};
+  const kcal=m["energy-kcal_100g"]!=null?+m["energy-kcal_100g"]:(m["energy_100g"]!=null?+m["energy_100g"]/4.184:null);
+  if(kcal==null||isNaN(kcal))return null;
+  const mg=x=>m[x]!=null&&!isNaN(+m[x])?Math.round(+m[x]*1000*10)/10:null;
+  const v={kcal:Math.round(kcal),p:m.proteins_100g,f:m.fat_100g,c:m.carbohydrates_100g,fib:m.fiber_100g,sug:m.sugars_100g,sat:m["saturated-fat_100g"],chol:mg("cholesterol_100g"),na:mg("sodium_100g"),k:mg("potassium_100g"),ca:mg("calcium_100g"),fe:mg("iron_100g")};
+  return{name:((p.product_name_ar||p.product_name||"")+(p.brands?" - "+p.brands:"")).trim(),v:v,sg:+p.serving_quantity||""}}
+ catch(e){return null}}
+async function findBc(n){n=String(n||"").replace(/\D/g,"");if(!n){SH.msg="اكتب رقم الباركود.";return drawSheet()}
  const f=S.cf.find(x=>x.bc===n);SH.busy="";
- if(f){SH.msg="";return pickFood({n:f.n,src:f.src,p:f.p,por:f.por||[]})}
- SH.mode="l";SH.bc=n;SH.msg="الباركود "+n+" مش متسجل عندك. صوّر الجدول الغذائي على العبوة وهيتحفظ بالباركود ده.";drawSheet()}
+ if(f){SH.msg="";return pickFood({n:f.n,src:f.src,p:f.p,por:f.por||[],ref:f.ref||0})}
+ SH.busy="بدوّر في قاعدة المنتجات...";SH.msg="";SH.mode="b";drawSheet();
+ const o=await offLookup(n);SH.busy="";
+ if(o){SH.mode="l";SH.bc=n;SH.res={type:"l",name:o.name,bc:n,sg:o.sg,v:o.v};SH.msg="لقيته في قاعدة Open Food Facts. راجع القيم (لكل 100 جم) قبل الحفظ.";return drawSheet()}
+ SH.mode="l";SH.bc=n;SH.msg="الباركود "+n+" مش متسجل. صوّر الجدول الغذائي على العبوة وهيتحفظ بالباركود ده.";drawSheet()}
+async function scanCam(){
+ if(!("BarcodeDetector" in window)){SH.msg="المتصفح ده مبيقراش الباركود بالكاميرا. صوّر الباركود أو اكتب الرقم.";return drawSheet()}
+ let stream;
+ try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}})}catch(e){SH.msg="مقدرتش أفتح الكاميرا (الصلاحية مرفوضة أو مش متاحة هنا). صوّر الباركود أو اكتب الرقم.";return drawSheet()}
+ const ov=document.createElement("div");ov.style.cssText="position:fixed;inset:0;background:#000;z-index:60;display:flex;flex-direction:column";
+ ov.innerHTML='<video playsinline muted autoplay style="flex:1;width:100%;object-fit:cover"></video><div style="padding:14px;text-align:center;color:#fff">وجّه الكاميرا على الباركود<br><button class="btn g" id="scx" style="width:auto;padding:8px 24px">إلغاء</button></div>';
+ document.body.appendChild(ov);const v=ov.querySelector("video");v.srcObject=stream;try{await v.play()}catch(e){}
+ let fm=["ean_13","ean_8","upc_a","upc_e","code_128"];
+ try{const sup=await BarcodeDetector.getSupportedFormats();fm=fm.filter(x=>sup.indexOf(x)>=0)}catch(e){}
+ const det=new BarcodeDetector({formats:fm});let on=true;
+ const stop=()=>{on=false;stream.getTracks().forEach(t=>t.stop());ov.remove()};
+ ov.querySelector("#scx").onclick=stop;
+ (async()=>{while(on){try{const r=await det.detect(v);if(r.length){const code=r[0].rawValue;stop();SH.bc=code;findBc(code);return}}catch(e){}await new Promise(r=>setTimeout(r,250))}})()}
+
+function candsFor(x){
+ const out=[],add=l=>l.forEach(c=>{if(out.length<16&&!out.some(z=>z.n===c.n))out.push(c)}),q=String(x.name_en||""),tk=q.split(/[ ,]+/).filter(Boolean);
+ const ar=x.name_ar?search(x.name_ar):[],all=q?search(q):[],two=tk.length>1?search(tk.slice(0,2).join(" ")):[],one=tk[0]?search(tk[0]):[];
+ const E=l=>l.filter(c=>c.src==="e");add(E(ar));add(all.slice(0,6));add(two.slice(0,5));add(ar.slice(0,3));add(E(one).slice(0,4));add(one.slice(0,3));
+ const W=q.toLowerCase().split(/[ ,]+/).filter(t=>t.length>2),ov=c=>{const e=(c.en||c.n).toLowerCase();return W.filter(t=>e.includes(t)).length};
+ return out.map((c,i)=>({c:c,i:i,o:ov(c)})).sort((a,b)=>b.o-a.o||(a.c.src==="e"?0:1)-(b.c.src==="e"?0:1)||a.i-b.i).slice(0,5).map(z=>z.c)}
 async function aiFoods(desc,file){
  if(!file&&!desc.trim()){SH.msg="اكتب وصف الأكلة الأول.";return drawSheet()}
- SH.busy="Claude بيقدّر...";SH.msg="";drawSheet();
- try{const r=await ai('Estimate the foods '+(file?'in this photo':'described here: '+desc)+'. Egyptian and Middle Eastern dishes are common. Return JSON only: {"items":[{"name":string,"grams":number,"per100":{"kcal":number,"p":number,"f":number,"c":number,"fib":number}}]} with per100 values per 100 g of the food and grams the estimated eaten amount. Be realistic, not optimistic.',file);
-  SH.res={type:"a",items:(r.items||[]).map(x=>({n:x.name,g:+x.grams||100,v:x.per100||{},on:true}))};SH.busy="";if(!SH.res.items.length)SH.msg="مقدرتش أحدد أكلات. جرّب وصف أوضح.";drawSheet()}
+ SH.busy="Claude بيحدد الأكلات...";SH.msg="";drawSheet();
+ try{const r=await ai('Identify the foods '+(file?'in this photo':'described here: '+desc)+'. Egyptian and Middle Eastern dishes are common. Return JSON only: {"items":[{"name_en":"short generic English food name like \'rice, white, cooked\' or \'chicken breast, grilled\'","name_ar":"Arabic name","grams":number,"per100":{"kcal":number,"p":number,"f":number,"c":number,"fib":number}}]} where grams is your realistic estimate of the amount eaten and per100 is a rough fallback per 100 g. List each distinct food separately (rice, meat, salad, bread...). Be realistic, not optimistic.',file);
+  const items=(r.items||[]).map(x=>{const c=candsFor(x);return{n:x.name_ar||x.name_en,g:+x.grams||100,v:x.per100||{},on:true,c:c,sel:c.length?0:-1}});
+  SH.res={type:"a",items:items};SH.busy="";if(!items.length)SH.msg="مقدرتش أحدد أكلات. جرّب وصف أوضح.";drawSheet()}
  catch(e){SH.busy="";SH.msg=(e&&e.message)||"حصلت مشكلة. جرّب تاني.";drawSheet()}}
+function resVec(x){return x.sel>=0&&x.c[x.sel]?x.c[x.sel].p:vec(x.v)}
 function drawRes(){const r=SH.res;
- if(r.type==="a")return'<p class="warn">ده تقدير تقريبي. راجع الجرامات.</p>'+r.items.map((x,i)=>'<div class="row"><span><input type="checkbox" data-ra="'+i+'" '+(x.on?"checked":"")+'> '+esc(x.n)+'</span><span style="width:90px"><input data-g="'+i+'" inputmode="decimal" value="'+x.g+'"></span></div><div class="meta">'+Math.round((+x.v.kcal||0)*x.g/100)+' سعر · بروتين '+Math.round((+x.v.p||0)*x.g/100)+' · كارب '+Math.round((+x.v.c||0)*x.g/100)+' · دهون '+Math.round((+x.v.f||0)*x.g/100)+'</div>').join("")+'<button class="btn" id="raadd">أضف المحدد</button>';
+ if(r.type==="a")return'<p class="warn">اتعرّفت على الأكلات دي. اختار أقرب صنف من الجدول لكل واحدة، وعدّل الجرامات.</p>'+r.items.map((x,i)=>{const p=resVec(x),k=p[0]>=0?Math.round(p[0]*x.g/100):0,pr=p[NI.p]>=0?Math.round(p[NI.p]*x.g/100):0;
+  return'<div class="row" style="flex-wrap:wrap;gap:6px"><span style="flex:1 1 100%"><input type="checkbox" data-ra="'+i+'" '+(x.on?"checked":"")+'> '+esc(x.n)+'</span><select data-rs="'+i+'" style="flex:1;margin:0">'+x.c.map((c,j)=>'<option value="'+j+'"'+(j===x.sel?" selected":"")+'>'+esc(c.n)+' ('+(SRC[c.src]||"")+')</option>').join("")+'<option value="-1"'+(x.sel<0?" selected":"")+'>تقدير AI</option></select><span style="width:84px"><input data-g="'+i+'" inputmode="decimal" value="'+x.g+'"></span></div><div class="meta">'+k+' سعر · بروتين '+pr+'</div>'}).join("")+'<button class="btn" id="raadd">أضف المحدد</button>';
  const main=["kcal","p","f","c","fib","sug","sat","na"],lb=LBL;
  return'<p class="warn">راجع القيم على العبوة قبل الحفظ (لكل 100 جم).</p><input id="ln" value="'+esc(r.name)+'" placeholder="اسم المنتج" style="text-align:right"><input id="lb" value="'+esc(r.bc||SH.bc||"")+'" placeholder="باركود" style="margin-top:6px"><input id="lsg" value="'+esc(r.sg)+'" inputmode="decimal" placeholder="وزن الحصة بالجرام (اختياري)" style="margin-top:6px"><div class="grid" style="margin-top:6px">'+main.map(k=>'<label class="meta">'+lb[k]+'<input data-lv="'+k+'" inputmode="decimal" value="'+(r.v[k]!=null?r.v[k]:"")+'"></label>').join("")+'</div><p class="meta">باقي العناصر المقروءة بتتحفظ تلقائيًا.</p><button class="btn" id="lsave">احفظ كأكلة</button>'}
+function addRes(){const d=S.nd;SH.res.items.filter(x=>x.on&&x.g>0).forEach(x=>{const c=x.sel>=0?x.c[x.sel]:null;nday(d).items.push({n:c?c.n:x.n,src:c?c.src:"a",g:x.g,m:SH.meal,p:resVec(x)})});nmark(d);closeSheet()}
+
 function saveLabel(){const r=SH.res,v=Object.assign({},r.v);document.querySelectorAll("[data-lv]").forEach(i=>{v[i.dataset.lv]=i.value===""?null:+i.value});
  const n=$("ln").value.trim();if(!n||v.kcal==null){SH.msg="اكتب الاسم والسعرات على الأقل.";return drawSheet()}
  const sg=+$("lsg").value,bc=$("lb").value.replace(/\D/g,"");
  const f={n:n,src:"l",p:vec(v),por:sg>0?[["حصة",sg]]:[],bc:bc};S.cf.push(f);xmark();SH.res=null;pickFood(f)}
-function addRes(){const d=S.nd;nday(d).items;SH.res.items.filter(x=>x.on&&x.g>0).forEach(x=>nday(d).items.push({n:x.n,src:"a",g:x.g,m:SH.meal,p:vec(x.v)}));nmark(d);closeSheet()}
 // ---- recipes (retention factors from USDA Table of Nutrient Retention Factors, Release 6) ----
 const RK=["ca","fe","mg","ph","k","na","zn","cu","vC","b1","b2","b3"];
 const RET={
@@ -526,7 +627,7 @@ function nutView(app){
  h+='<button class="btn g" id="cy">انسخ وجبات أمس</button>';
  const rd=(P.sex==="f"?RDA_F:RDA_M);
  h+='<details><summary>الميكروز النهارده (تقريبية للبالغين)</summary>'+Object.keys(rd).map(k=>{const v=g(k),has=T.h[NI[k]],lim=LIM[k];return'<div class="mrow"><span>'+LBL[k]+(has?"":" (مفيش بيانات)")+'</span><span>'+(Math.round(v*10)/10)+' / '+(lim?"حد ":"")+rd[k]+' '+(UN[k]||"")+'</span></div>'+bar(v,rd[k],lim&&v>rd[k]?"lo":"")}).join("")+'<p class="meta">الأصناف اللي مفيهاش قيمة لعنصر معين بتتحسب صفر في العنصر ده. فالأرقام ممكن تكون أقل من الحقيقي.</p></details>';
- h+='<details><summary>الأهداف والبيانات</summary><div class="grid">'+[["sex","النوع",""],["age","السن",P.age],["h","الطول سم",P.h],["w","الوزن كجم",P.w||lastBody().w||""],["bf","دهون % (من InBody)",P.bf||lastBody().f||""],["ok","سعرات (تعديل يدوي)",P.ok||""],["op","بروتين جم",P.op||""],["oc","كارب جم",P.oc||""],["of","دهون جم",P.of||""]].map(x=>x[0]==="sex"?'<label class="meta">النوع<select data-pf="sex"><option value="m"'+(P.sex!=="f"?" selected":"")+'>ذكر</option><option value="f"'+(P.sex==="f"?" selected":"")+'>أنثى</option></select></label>':'<label class="meta">'+x[1]+'<input data-pf="'+x[0]+'" inputmode="decimal" value="'+esc(x[2]||"")+'"></label>').join("")+'<label class="meta">الهدف<select data-pf="goal"><option value="bulk"'+(P.goal!=="cut"&&P.goal!=="keep"?" selected":"")+'>تضخيم</option><option value="cut"'+(P.goal==="cut"?" selected":"")+'>تنشيف</option><option value="keep"'+(P.goal==="keep"?" selected":"")+'>ثبات</option></select></label><label class="meta">النشاط<select data-pf="act"><option value="1.375"'+(P.act==1.375?" selected":"")+'>3 تمرينات/أسبوع</option><option value="1.55"'+(!P.act||P.act==1.55?" selected":"")+'>4–5 تمرينات</option><option value="1.725"'+(P.act==1.725?" selected":"")+'>6–7 تمرينات</option></select></label></div>'+(tg?'<p class="meta">الحساب: معدل الحرق الأساسي '+tg.bmr+' سعر، والحرق اليومي ~'+tg.tdee+'. تقدير بمعادلات معروفة (Katch-McArdle لو دخلت الدهون %، وإلا Mifflin-St Jeor). عدّله بالتجربة، ومش بديل لأخصائي تغذية.</p>':"")+'</details>';
+ h+='<details><summary>الأهداف والبيانات</summary><div class="grid">'+[["sex","النوع",""],["age","السن",P.age],["h","الطول سم",P.h],["w","الوزن كجم",P.w||lastBody().w||""],["bf","دهون % (من InBody)",P.bf||lastBody().f||""],["ok","سعرات (تعديل يدوي)",P.ok||""],["op","بروتين جم",P.op||""],["oc","كارب جم",P.oc||""],["of","دهون جم",P.of||""]].map(x=>x[0]==="sex"?'<label class="meta">النوع<select data-pf="sex"><option value="m"'+(P.sex!=="f"?" selected":"")+'>ذكر</option><option value="f"'+(P.sex==="f"?" selected":"")+'>أنثى</option></select></label>':'<label class="meta">'+x[1]+'<input data-pf="'+x[0]+'" inputmode="decimal" value="'+esc(x[2]||"")+'"></label>').join("")+'<label class="meta">الهدف<select data-pf="goal"><option value="bulk"'+(P.goal!=="cut"&&P.goal!=="keep"?" selected":"")+'>تضخيم</option><option value="cut"'+(P.goal==="cut"?" selected":"")+'>تنشيف</option><option value="keep"'+(P.goal==="keep"?" selected":"")+'>ثبات</option></select></label><label class="meta">النشاط<select data-pf="act"><option value="1.375"'+(P.act==1.375?" selected":"")+'>3 تمرينات/أسبوع</option><option value="1.55"'+(!P.act||P.act==1.55?" selected":"")+'>4–5 تمرينات</option><option value="1.725"'+(P.act==1.725?" selected":"")+'>6–7 تمرينات</option></select></label></div>'+(tg&&tg.hint?'<p class="warn">'+esc(tg.hint)+'</p>':"")+(tg?'<p class="meta">الحساب: معدل الحرق الأساسي '+tg.bmr+' سعر، والحرق اليومي ~'+tg.tdee+'. تقدير بمعادلات معروفة (Katch-McArdle لو دخلت الدهون %، وإلا Mifflin-St Jeor). عدّله بالتجربة، ومش بديل لأخصائي تغذية.</p>':"")+'</details>';
  h+='<details><summary>مراجعة أسبوعية</summary>'+review(tg)+'</details>';
  app.innerHTML=h;
  $("dp").onclick=()=>{S.nd=shiftDay(d,-1);render()};$("dn").onclick=()=>{S.nd=shiftDay(d,1);render()};
