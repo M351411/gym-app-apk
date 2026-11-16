@@ -3,10 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>متابع التمرين والتغذية</title>
-<link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#17213B">
-<link rel="apple-touch-icon" href="icon-192.png">
+<title>متابع التمرين</title>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;800&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#F1F0EB;--card:#FFFFFF;--ink:#17213B;--mut:#6A7186;--line:#DAD8D0;--acc:#2F5BEA;--ok:#2E7D4F;--hi:#B86E00;--lo:#B3341E;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
@@ -78,7 +75,7 @@ textarea.mono{height:120px;font:12px monospace;direction:ltr}
 .seg button.on{background:var(--acc);border-color:var(--acc);color:#fff}
 select{font:400 14px Cairo,sans-serif}
 </style>
-</head>
+<link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon.svg"><meta name="theme-color" content="#151515"></head>
 <body>
 <header><h1>متابع التمرين</h1><div class="meta" style="text-align:left"><div id="wk"></div><div id="sub"></div></div></header>
 <div id="net">مفيش نت. كمّل عادي، اللي بتسجله محفوظ على موبايلك وهيتبعت لما النت يرجع.</div>
@@ -86,14 +83,25 @@ select{font:400 14px Cairo,sans-serif}
 <main id="app"></main>
 <main>
 <details><summary>الإعدادات والنسخة الاحتياطية</summary>
+<p class="meta">مفتاح Gemini API (للميزات اللي بتقرا الصور وتحدد الأكلات). بيتحفظ على جهازك بس ومش بيدخل في النسخة الاحتياطية.</p>
+<input type="password" id="gk" placeholder="الصق المفتاح هنا" autocomplete="off" style="direction:ltr">
+<button class="btn g" id="gks">احفظ المفتاح</button>
+<button class="btn g" id="gkc">امسح المفتاح</button>
+<button class="btn g" id="gkt">جرّب المفتاح</button>
+<select id="gmd" style="margin-top:6px"><option value="gemini-3.8-flash">Gemini 3.8 Flash (الافتراضي)</option><option value="gemini-3.5-flash">Gemini 3.5 Flash</option><option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (أبطأ وأغلى)</option></select>
+<p class="meta">اختياري: رابط وسيط (Cloudflare Worker) بيحتفظ بالمفتاح بدل المتصفح. لو حطيته المفتاح مش مطلوب هنا.</p>
+<input id="gpx" placeholder="https://xxx.workers.dev" style="direction:ltr">
+<button class="btn g" id="gpxs">احفظ الإعدادات</button>
+<p class="meta">نسخة احتياطية بملف:</p>
+<button class="btn g" id="exf">تصدير ملف</button>
+<button class="btn g" id="imf">استيراد ملف</button>
+<p class="meta" id="gkm"></p>
 <p class="meta">بداية البرنامج (لعداد الـ12 أسبوع):</p>
 <input type="date" id="st">
 <p class="meta">النسخة الاحتياطية: انسخ النص واحفظه عندك. للاسترجاع الصق نسخة وضغط استرجاع.</p>
 <textarea class="mono" id="bk"></textarea>
 <button class="btn g" id="mkbk">طلّع نسخة بياناتي</button>
 <button class="btn g" id="rs">استرجاع من النص</button>
-<p class="meta">مفتاح Anthropic API (اختياري، لميزات الـ AI: قراءة الملصق وصور الأكل وورقة الـ InBody). بيتخزن على جهازك بس، والاستهلاك بيتحاسب على حسابك في Anthropic.</p>
-<input id="akey" type="password" placeholder="sk-ant-...">
 <p class="meta">استيراد سبليت جديد: الصق JSON بالشكل [{"n":"اسم اليوم","x":[["اسم التمرين","1–2",مجموعات,أقل عدات,أقصى عدات,"بديل 1","بديل 2","ملاحظة"]]}]</p>
 <textarea class="mono" id="sp"></textarea>
 <button class="btn g" id="imp">استيراد سبليت</button>
@@ -166,7 +174,7 @@ function today(){const d=new Date();return d.getFullYear()+"-"+p2(d.getMonth()+1
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]))}
 const K="belg_v2";
 let S=null;try{S=JSON.parse(localStorage.getItem(K)||"null")}catch(e){}
-S=S||{};S.plan=S.plan||DEF;S.cur=S.cur||{};S.sess=S.sess||{};S.alt=S.alt||{};S.day=S.day||0;S.body=S.body||[];S.pend=S.pend||{};S.start=S.start||today();S.nut=S.nut||{};S.cf=S.cf||[];S.fav=S.fav||[];S.prof=S.prof||{sex:'m',age:25,h:175,act:1.55,goal:'bulk'};S.nd=today();
+S=S||{};S.plan=S.plan||DEF;S.cur=S.cur||{};S.sess=S.sess||{};S.alt=S.alt||{};S.day=S.day||0;S.body=S.body||[];S.pend=S.pend||{};S.start=S.start||today();S.nut=S.nut||{};S.cf=S.cf||[];S.fav=S.fav||[];S.cp=S.cp||{};S.prof=S.prof||{sex:'m',age:25,h:175,act:1.55,goal:'bulk'};S.nd=today();
 function save(){try{localStorage.setItem(K,JSON.stringify(S))}catch(e){}}
 // ---- cloud sync (private per-user docs); local copy always works ----
 let DB=null,UID=null;
@@ -174,7 +182,7 @@ const col=()=>DB.collection("data/users/"+UID);
 function docData(id){
  if(id==="cfg")return{j:JSON.stringify({plan:S.plan,alt:S.alt,start:S.start})};
  if(id==="body")return{j:JSON.stringify(S.body)};
- if(id==="nx")return{j:JSON.stringify({cf:S.cf,fav:S.fav,prof:S.prof})};
+ if(id==="nx")return{j:JSON.stringify({cf:S.cf,fav:S.fav,prof:S.prof,cp:S.cp})};
  if(id.indexOf("n_")===0)return{j:JSON.stringify(S.nut[id.slice(2)]||{items:[],w:0})};
  const k=id.slice(2);return{k:k,ts:Date.now(),j:JSON.stringify(S.sess[k])}}
 function mark(id){S.pend[id]=1;save();flush();stat()}
@@ -194,7 +202,7 @@ async function cloud(){
    if(S.pend[d.id])return;
    if(d.id==="cfg"){S.plan=o.plan||S.plan;S.alt=o.alt||S.alt;S.start=o.start||S.start}
    else if(d.id==="body")S.body=o||S.body;
-   else if(d.id==="nx"){S.cf=o.cf||S.cf;S.fav=o.fav||S.fav;S.prof=o.prof||S.prof}
+   else if(d.id==="nx"){S.cf=o.cf||S.cf;S.fav=o.fav||S.fav;S.prof=o.prof||S.prof;S.cp=o.cp||S.cp}
    else if(d.id.indexOf("n_")===0)S.nut[d.id.slice(2)]=o
    else if(d.id.indexOf("s_")===0)S.sess[d.id.slice(2)]=o});
   if(!seen.cfg)S.pend.cfg=1;if(!seen.body&&S.body.length)S.pend.body=1;
@@ -294,7 +302,7 @@ function render(){
  nt.innerHTML="<summary>ملاحظة الجلسة</summary><textarea rows='3' placeholder='نوم، إرهاق، ألم، أي حاجة تفتكرها'></textarea>";
  const ta=nt.querySelector("textarea");ta.value=today_s?today_s.note:"";
  ta.oninput=()=>{sess().note=ta.value;save()};ta.onchange=()=>mark("s_"+sk());
- app.appendChild(nt);
+ app.appendChild(nt);app.appendChild(weekBox());
 }
 // ===== InBody / body composition =====
 const BFIELDS=[["w","الوزن (كجم)"],["m","العضل الهيكلي SMM (كجم)"],["f","نسبة الدهون PBF (%)"],["bfm","كتلة الدهون (كجم)"],["tbw","ماء الجسم (لتر)"],["bmr","معدل الحرق BMR (سعر)"],["vfl","الدهون الحشوية (مستوى)"],["score","درجة InBody"]];
@@ -325,7 +333,7 @@ function rstat(k,v,rg){if(!rg||!rg[k]||rg[k].length<2||!(v>0))return"";const a=r
 function bodyView(app){
  const B=S.body.slice().sort((a,b)=>a.d<b.d?-1:1),L=B.filter(x=>x.w).slice(-1)[0]||{},P=B.filter(x=>x.w).slice(-2,-1)[0];
  const fv=k=>BD[k]!=null?esc(BD[k]):"";
- let t='<div class="ex"><div class="nm">قياس جديد</div><button class="btn g" id="ib">📷 صوّر ورقة الـ InBody (ملء تلقائي)</button><div class="meta" id="ibm"></div>';
+ let t='<div class="ex"><div class="nm">قياس جديد</div>'+(AI_ON?'<button class="btn g" id="ib">📷 صوّر ورقة الـ InBody (ملء تلقائي)</button>':"")+'<div class="meta" id="ibm"></div>';
  t+='<div class="grid" style="margin-top:8px"><label class="meta">التاريخ<input type="date" id="b_d" value="'+(BD.d||today())+'"></label>'+BFIELDS.map(x=>'<label class="meta">'+x[1]+'<input inputmode="decimal" data-bf="'+x[0]+'" value="'+fv(x[0])+'"></label>').join("")+'</div>';
  t+='<details><summary>خانات إضافية</summary><div class="grid">'+BADV.map(x=>'<label class="meta">'+x[1]+'<input inputmode="decimal" data-bf="'+x[0]+'" value="'+fv(x[0])+'"></label>').join("")+'</div></details>';
  t+='<details><summary>تحليل الأطراف والجذع (كجم عضل)</summary><div class="grid">'+SEGN.map(x=>'<label class="meta">'+x[1]+'<input inputmode="decimal" data-bs="'+x[0]+'" value="'+(BD.sl&&BD.sl[x[0]]!=null?esc(BD.sl[x[0]]):"")+'"></label>').join("")+'</div></details>';
@@ -354,7 +362,7 @@ function bodyView(app){
  app.querySelectorAll("[data-tm]").forEach(b=>b.onclick=()=>{S.bm=b.dataset.tm;save();render()});
  if($("tf"))$("tf").onchange=()=>{S.prof.tf=$("tf").value;xmark();render()};
  app.querySelectorAll("[data-bd]").forEach(b=>b.onclick=()=>{if(b.dataset.c!=="1"){b.dataset.c="1";b.textContent="تأكيد؟";return}S.body=S.body.filter(x=>x.d!==b.dataset.bd);mark("body");render()});
- $("ib").onclick=()=>{const i=document.createElement("input");i.type="file";i.accept="image/*";i.onchange=async()=>{if(!i.files[0])return;$("ibm").textContent="Claude بيقرا الورقة...";
+ if($("ib"))$("ib").onclick=()=>{const i=document.createElement("input");i.type="file";i.accept="image/*";i.onchange=async()=>{if(!i.files[0])return;$("ibm").textContent="Gemini بيقرا الورقة...";
   try{const r=await ai(INBODY_PROMPT,i.files[0]);const e=bodyFromAI(r);BD=Object.assign({d:today()},e);$("ibm").textContent="";render();$("ibm").textContent="اتملى. راجع الأرقام قبل الحفظ.";warn()}
   catch(e){$("ibm").textContent=(e&&e.message)||"حصلت مشكلة. جرّب صورة أوضح."}};i.click()};
  $("bs").onclick=()=>{const e=readBody();if(!e.w&&!e.f&&!e.m){$("bw").innerHTML='<p class="warn">اكتب الوزن على الأقل.</p>';return}
@@ -370,13 +378,24 @@ function readBody(){const e={d:BD.d||$("b_d").value||today()};
 
 function net(){$("net").style.display=navigator.onLine?"none":"block"}
 addEventListener("online",()=>{net();flush()});addEventListener("offline",net);net();
-$("akey").value=localStorage.getItem("ak")||"";$("akey").onchange=()=>localStorage.setItem("ak",$("akey").value.trim());
 $("st").onchange=()=>{if($("st").value){S.start=$("st").value;mark("cfg");render()}};
 $("mkbk").onclick=()=>{$("bk").value=JSON.stringify(S)};
 $("rs").onclick=()=>{try{const o=JSON.parse($("bk").value);if(!o.plan)throw 0;S=o;S.pend=S.pend||{};S.pend.cfg=1;S.pend.body=1;Object.keys(S.sess||{}).forEach(k=>S.pend["s_"+k]=1);save();render();flush()}catch(e){alert("النص مش نسخة صحيحة.")}};
 $("imp").onclick=()=>{try{const p=JSON.parse($("sp").value);if(!Array.isArray(p)||!p[0].x)throw 0;S.plan=p;S.day=0;S.cur={};S.alt={};mark("cfg");render()}catch(e){alert("صيغة السبليت غلط. راجع الشكل المكتوب فوق.")}};
 $("rsp").onclick=()=>{S.plan=DEF;S.day=0;S.cur={};S.alt={};mark("cfg");render()};
+function gkShow(m){$("gkm").textContent=m||(gemKey()?"المفتاح محفوظ ("+gemKey().slice(0,4)+"••••"+gemKey().slice(-3)+").":"لسه مفيش مفتاح.")}
+$("gks").onclick=()=>{const v=$("gk").value.trim();if(!v){gkShow("الصق المفتاح الأول.");return}
+ try{localStorage.setItem("gemini_key",v);$("gk").value="";gkShow()}catch(e){gkShow("المتصفح مش مسمح بالحفظ هنا.")}};
+$("gkc").onclick=()=>{try{localStorage.removeItem("gemini_key")}catch(e){}$("gk").value="";gkShow()};
+gkShow();
+$("gmd").value=gemModel();$("gpx").value=lsGet("gemini_proxy");
+$("gpxs").onclick=()=>{try{localStorage.setItem("gemini_model",$("gmd").value);localStorage.setItem("gemini_proxy",$("gpx").value.trim())}catch(e){}gkShow("اتحفظت الإعدادات.")};
+$("gkt").onclick=async()=>{gkShow("بجرّب...");try{const r=await ai('Return JSON only: {"ok":true}');gkShow(r&&r.ok?"المفتاح شغّال ✅":"وصل رد غريب. جرّب تاني.")}catch(e){gkShow((e&&e.message)||"فشل الاتصال.")}};
+$("exf").onclick=()=>{try{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(S)],{type:"application/json"}));a.download="gym-backup-"+today()+".json";a.click()}catch(e){gkShow("التصدير مش متاح هنا. استخدم النص.")}};
+$("imf").onclick=()=>{const i=document.createElement("input");i.type="file";i.accept=".json,application/json";i.onchange=async()=>{if(i.files[0]){$("bk").value=await i.files[0].text();$("rs").click()}};i.click()};
+if("serviceWorker" in navigator&&/^https?:$/.test(location.protocol)&&!/claude\.ai$/.test(location.hostname))navigator.serviceWorker.register("sw.js").catch(()=>{});
 // ===== nutrition =====
+const AI_ON=true;
 const KEYS=FD.k,NI={};KEYS.forEach((k,i)=>NI[k]=i);
 const LBL={kcal:"سعرات",p:"بروتين",f:"دهون",c:"كارب",fib:"ألياف",sug:"سكر",sat:"دهون مشبعة",mono:"دهون أحادية",poly:"دهون عديدة",chol:"كوليسترول",na:"صوديوم",k:"بوتاسيوم",ca:"كالسيوم",fe:"حديد",mg:"ماغنسيوم",ph:"فوسفور",zn:"زنك",cu:"نحاس",mn:"منجنيز",se:"سيلينيوم",vA:"فيتامين A",vC:"فيتامين C",b1:"B1 ثيامين",b2:"B2 ريبوفلافين",b3:"B3 نياسين",b6:"B6",fol:"فولات",b12:"B12",vD:"فيتامين D",vE:"فيتامين E",vK:"فيتامين K",b5:"B5",o3:"أوميجا 3"};
 const UN={chol:"مجم",na:"مجم",k:"مجم",ca:"مجم",fe:"مجم",mg:"مجم",ph:"مجم",zn:"مجم",cu:"مجم",mn:"مجم",se:"مكجم",vA:"مكجم",vC:"مجم",b1:"مجم",b2:"مجم",b3:"مجم",b6:"مجم",fol:"مكجم",b12:"مكجم",vD:"مكجم",vE:"مجم",vK:"مكجم",b5:"مجم",fib:"جم",o3:"جم"};
@@ -418,16 +437,24 @@ function nday(d){return S.nut[d]=S.nut[d]||{items:[],w:0}}
 function shiftDay(d,n){const x=new Date(d+"T12:00:00");x.setDate(x.getDate()+n);return x.getFullYear()+"-"+p2(x.getMonth()+1)+"-"+p2(x.getDate())}
 function nmark(d){mark("n_"+d)}function xmark(){mark("nx")}
 async function imgBlob(file){const b=await createImageBitmap(file),s=Math.min(1,1280/Math.max(b.width,b.height)),c=document.createElement("canvas");c.width=Math.round(b.width*s);c.height=Math.round(b.height*s);c.getContext("2d").drawImage(b,0,0,c.width,c.height);return new Promise(r=>c.toBlob(r,"image/jpeg",.85))}
+const GEM_MODEL="gemini-3.8-flash";
+function lsGet(k){try{return(localStorage.getItem(k)||"").trim()}catch(e){return""}}
+function gemModel(){return lsGet("gemini_model")||GEM_MODEL}
+function gemKey(){let k="";try{k=localStorage.getItem("gemini_key")||""}catch(e){}return k.trim()}
+function blobB64(b){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(",")[1]);r.onerror=()=>rej(new Error("فشل قراءة الصورة"));r.readAsDataURL(b)})}
 async function ai(prompt,file){
- const key=localStorage.getItem("ak");
- if(!key)throw new Error("ميزة الـ AI محتاجة مفتاح Anthropic API. أضفه من الإعدادات (اختياري).");
- const content=[];
- if(file){const b=await imgBlob(file);const d=await new Promise(r=>{const f=new FileReader();f.onload=()=>r(String(f.result).split(",")[1]);f.readAsDataURL(b)});content.push({type:"image",source:{type:"base64",media_type:"image/jpeg",data:d}})}
- content.push({type:"text",text:prompt+"\nReturn the JSON only, with no markdown fences and no extra text."});
- const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1500,messages:[{role:"user",content:content}]})});
- if(!r.ok)throw new Error("فشل الاتصال بالـ AI ("+r.status+"). راجع المفتاح والنت.");
- const j=await r.json();const t=(j.content||[]).map(x=>x.text||"").join("");
- return JSON.parse(t.replace(/```json|```/g,"").trim())}
+ const key=gemKey(),px=lsGet("gemini_proxy");if(!key&&!px)throw new Error("ضيف مفتاح Gemini من الإعدادات (تحت في الصفحة) الأول.");
+ const parts=[{text:prompt}];
+ if(file)parts.push({inline_data:{mime_type:"image/jpeg",data:await blobB64(await imgBlob(file))}});
+ let res;
+ try{res=await fetch((px?px+"?model="+gemModel():"https://generativelanguage.googleapis.com/v1beta/models/"+gemModel()+":generateContent"),{method:"POST",headers:Object.assign({"Content-Type":"application/json"},px?{}:{"x-goog-api-key":key}),body:JSON.stringify({contents:[{role:"user",parts:parts}],generationConfig:{responseMimeType:"application/json"}})})}
+ catch(e){throw new Error("مقدرتش أوصل لـ Gemini. اتأكد من النت أو إن الصفحة مش محجوبة الاتصال.")}
+ if(res.status===400||res.status===403){try{localStorage.removeItem("gemini_key")}catch(e){}throw new Error("مفتاح Gemini مش صح أو مش مفعّل. جرّب تاني بمفتاح جديد.")}
+ if(!res.ok)throw new Error("Gemini رجّع خطأ ("+res.status+"). جرّب تاني.");
+ const d=await res.json();
+ const txt=(((d.candidates||[])[0]||{}).content||{}).parts;
+ const s=txt?txt.map(p=>p.text||"").join(""):"";
+ try{return JSON.parse(s.replace(/```json|```/g,"").trim())}catch(e){throw new Error("الرد من Gemini مش واضح. جرّب صورة أو وصف أوضح.")}}
 const vec=o=>KEYS.map(k=>o&&o[k]!=null&&o[k]!==""&&!isNaN(+o[k])?+o[k]:-1);
 const KL=KEYS.join(", ");
 // ---- sheet ----
@@ -437,17 +464,19 @@ function closeSheet(){$("sh").style.display="none";render()}
 function kc(p,g){return p[0]>=0?Math.round(p[0]*g/100):0}
 function drawSheet(){
  const c=$("shc"),m=SH.mode;
+ if(m==="l"&&!AI_ON&&!SH.res)SH.res={type:"l",name:"",bc:SH.bc||"",sg:"",v:{}};
  let h='<div class="shh"><b>أضف لـ '+MEALS[SH.meal]+'</b><button class="x" id="shx">إغلاق</button></div>';
  if(SH.sel)return drawSel(c,h);
- h+='<div class="seg">'+[["s","بحث"],["f","مفضلة"],["l","ملصق"],["i","صورة أكل"],["t","وصف"],["b","باركود"],["r","وصفة"],["m","أكلة خاصة"]].map(x=>'<button data-m="'+x[0]+'" class="'+(m===x[0]?"on":"")+'">'+x[1]+'</button>').join("")+'</div>';
+ h+='<div class="seg">'+[["s","بحث"],["f","مفضلة"],["l","ملصق"],["i","صورة أكل"],["t","وصف"],["b","باركود"],["r","وصفة"],["u","أكلاتي"],["m","أكلة خاصة"]].filter(x=>AI_ON||(x[0]!=="i"&&x[0]!=="t")).map(x=>'<button data-m="'+x[0]+'" class="'+(m===x[0]?"on":"")+'">'+x[1]+'</button>').join("")+'</div>';
  if(m==="s")h+='<input id="sq" placeholder="ابحث: فول، رز، chicken breast..." value="'+esc(SH.q)+'"><div id="sr"></div>';
- if(m==="f")h+=S.fav.length?S.fav.map((f,i)=>'<div class="row rs" data-fv="'+i+'"><span>'+esc(f.n)+'</span><span class="meta">'+kc(f.p,100)+' سعر/100جم</span></div>').join(""):'<p class="meta">لسه مفيش مفضلة. اضغط ★ على أي أكلة بعد ما تختارها.</p>';
- if(m==="l")h+='<p class="meta">صوّر الجدول الغذائي على العبوة (الخلفية). Claude بيقراه وانت بتراجع قبل الحفظ.</p><button class="btn" id="pick">صوّر أو اختار صورة</button>';
+ if(m==="f")h+=S.fav.length?S.fav.map((f,i)=>'<div class="row rs" data-fv="'+i+'"><span>'+esc(f.n)+'</span><span class="meta">'+kc(f.p,100)+' سعر/100جم <button class="x" data-fd="'+i+'">حذف</button></span></div>').join(""):'<p class="meta">لسه مفيش مفضلة. اضغط ★ على أي أكلة بعد ما تختارها.</p>';
+ if(m==="l")h+=AI_ON?'<p class="meta">صوّر الجدول الغذائي على العبوة (الخلفية). Gemini بيقراه وانت بتراجع قبل الحفظ.</p><button class="btn" id="pick">صوّر أو اختار صورة</button>':'<p class="meta">اكتب القيم من الجدول الغذائي على العبوة (لكل 100 جم). لو الجدول للحصة بس، حوّلها لكل 100 جم.</p>';
  if(m==="i")h+='<p class="meta">صوّر الأكلة. بيطلع تقدير تقريبي للأصناف والجرامات، وانت تعدّل الجرامات.</p><button class="btn" id="pick">صوّر أو اختار صورة</button>';
  if(m==="t")h+='<textarea id="td" rows="3" placeholder="مثال: طبقين كشري كبير مع دقة وشطة، أو سندوتش شاورما فراخ"></textarea><button class="btn" id="tgo">قدّر بالـ AI</button>';
- if(m==="b")h+='<input id="bcn" inputmode="numeric" placeholder="رقم الباركود" value="'+esc(SH.bc)+'"><button class="btn" id="bgo">دوّر</button><button class="btn" id="scan">📷 امسح بالكاميرا</button><button class="btn g" id="pick">صوّر الباركود</button>';
+ if(m==="b")h+='<input id="bcn" inputmode="numeric" placeholder="رقم الباركود" value="'+esc(SH.bc)+'"><button class="btn" id="bgo">دوّر</button><button class="btn" id="scan">📷 امسح بالكاميرا</button>'+(AI_ON?'<button class="btn g" id="pick">صوّر الباركود</button>':"");
  if(m==="m")h+=custForm();
  if(m==="r")h+=drawRec();
+ if(m==="u")h+=drawMine();
  if(SH.busy)h+='<p class="meta">'+esc(SH.busy)+'</p>';
  if(SH.msg)h+='<p class="warn">'+esc(SH.msg)+'</p>';
  if(SH.res)h+=drawRes();
@@ -455,10 +484,11 @@ function drawSheet(){
 function fillSearch(){const r=search($("sq").value||""),el=$("sr");SH.list=r;el.innerHTML=r.length?r.map((x,i)=>'<div class="row rs" data-r="'+i+'"><span>'+esc(x.n)+'<br><span class="meta">'+(x.en?esc(x.en)+" · ":"")+(SRC[x.src]||"")+'</span></span><span class="meta">'+kc(x.p,100)+' سعر/100جم</span></div>').join(""):($("sq").value.length>1?'<p class="meta">مفيش نتيجة. جرّب كلمة تانية أو بالإنجليزي، أو استخدم الوصف بالـ AI.</p>':"")}
 function wireSheet(){
  const c=$("shc");$("shx").onclick=closeSheet;
- c.querySelectorAll("[data-m]").forEach(b=>b.onclick=()=>{SH.mode=b.dataset.m;SH.msg="";SH.res=null;drawSheet()});
+ c.querySelectorAll("[data-m]").forEach(b=>b.onclick=()=>{SH.mode=b.dataset.m;SH.msg="";SH.res=null;SH.ed=null;drawSheet()});
  if(SH.mode==="s")$("sq").oninput=()=>{SH.q=$("sq").value;fillSearch();wireRows()};
  wireRows();
  c.querySelectorAll("[data-fv]").forEach(r=>r.onclick=()=>{const f=S.fav[+r.dataset.fv];pickFood(f)});
+ c.querySelectorAll("[data-fd]").forEach(b=>b.onclick=e=>{e.stopPropagation();S.fav.splice(+b.dataset.fd,1);xmark();drawSheet()});
  const pk=$("pick");if(pk)pk.onclick=()=>{const i=document.createElement("input");i.type="file";i.accept="image/*";i.onchange=()=>i.files[0]&&onPhoto(i.files[0]);i.click()};
  if($("tgo"))$("tgo").onclick=()=>aiFoods($("td").value,null);
  if($("bgo"))$("bgo").onclick=()=>findBc($("bcn").value);
@@ -468,14 +498,15 @@ function wireSheet(){
  c.querySelectorAll("[data-ra]").forEach(b=>b.onclick=()=>{const x=SH.res.items[+b.dataset.ra];x.on=!x.on;drawSheet()});
  if($("raadd"))$("raadd").onclick=addRes;
  if($("lsave"))$("lsave").onclick=saveLabel;
- c.querySelectorAll("[data-g]").forEach(i=>i.oninput=()=>{SH.res.items[+i.dataset.g].g=+i.value||0});if(SH.mode==="r")wireRec()}
+ c.querySelectorAll("[data-g]").forEach(i=>i.oninput=()=>{SH.res.items[+i.dataset.g].g=+i.value||0});if(SH.mode==="r")wireRec();if(SH.mode==="u")wireMine()}
 function wireRows(){$("shc").querySelectorAll("[data-r]").forEach(r=>r.onclick=()=>pickFood(SH.list[+r.dataset.r]))}
 function pickFood(f){SH.sel={f:f,g:(f.por&&f.por[0]?f.por[0][1]:100)};drawSheet()}
 function drawSel(c,h){
  const f=SH.sel.f,g=SH.sel.g,isFav=S.fav.some(x=>x.n===f.n&&x.src===f.src);
  h+='<div class="nm">'+esc(f.n)+'</div><div class="meta">'+(SRC[f.src]||"")+'</div>';
- h+='<div class="chips">'+[[ "100 جم",100]].concat(f.por||[]).map(x=>'<span class="chip"><span data-pg="'+x[1]+'">'+esc(x[0])+' ('+x[1]+'جم)</span></span>').join("")+'</div>';
+ h+='<div class="chips">'+[[ "100 جم",100]].concat((f.por||[]).concat(S.cp[f.src+"|"+f.n]||[])).map(x=>'<span class="chip"><span data-pg="'+x[1]+'">'+esc(x[0])+' ('+x[1]+'جم)</span></span>').join("")+'</div>';
  h+='<input id="gi" inputmode="decimal" value="'+g+'">'+(f.ref>0?'<label class="meta"><input type="checkbox" id="rfx" style="width:auto"> الوزن بالقشر أو العظم (فاقد '+f.ref+'%، بيتخصم تلقائيًا)</label>':'')+'<div id="pv" class="meta" style="margin:8px 0"></div>';
+ h+='<div class="grid" style="margin-top:6px"><input id="cpn" placeholder="اسم حصة (مثلاً: رغيفي)" style="text-align:right"><button class="btn g" id="cpa" style="margin:0">احفظ الجرامات كحصة</button></div>';
  h+='<div class="seg">'+MEALS.map((n,i)=>'<button data-ml="'+i+'" class="'+(i===SH.meal?"on":"")+'">'+n+'</button>').join("")+'</div>';
  h+='<button class="btn" id="sadd">أضف</button><button class="btn g" id="sfav">'+(isFav?"شيل من المفضلة":"★ أضف للمفضلة")+'</button><button class="btn g" id="sback">رجوع</button>';
  c.innerHTML=h;$("shx").onclick=closeSheet;
@@ -486,7 +517,8 @@ function drawSel(c,h){
  c.querySelectorAll("[data-ml]").forEach(b=>b.onclick=()=>{SH.meal=+b.dataset.ml;pv();c.querySelectorAll("[data-ml]").forEach(x=>x.className=+x.dataset.ml===SH.meal?"on":"")});
  $("sadd").onclick=()=>{const gg=Math.round(eff()*10)/10;if(!(gg>0))return;const d=S.nd;nday(d).items.push({n:f.n,src:f.src,g:gg,m:SH.meal,p:f.p});nmark(d);SH.sel=null;closeSheet()};
  $("sfav").onclick=()=>{const i=S.fav.findIndex(x=>x.n===f.n&&x.src===f.src);if(i>=0)S.fav.splice(i,1);else S.fav.push({n:f.n,src:f.src,p:f.p,por:f.por||[],ref:f.ref||0});xmark();drawSheet()};
- $("sback").onclick=()=>{SH.sel=null;drawSheet()}}
+ $("sback").onclick=()=>{SH.sel=null;drawSheet()};
+ $("cpa").onclick=()=>{const n=$("cpn").value.trim(),g=Math.round((+$("gi").value||0)*10)/10;if(!n||!(g>0))return;const k=f.src+"|"+f.n;(S.cp[k]=S.cp[k]||[]).push([n,g]);xmark();drawSheet()}}
 function custForm(){
  const F=[["n","الاسم"],["kcal","سعرات/100جم"],["p","بروتين"],["c","كارب"],["f","دهون"],["fib","ألياف"],["na","صوديوم مجم"],["bc","باركود (اختياري)"]];
  return F.map(x=>'<input data-cf="'+x[0]+'" placeholder="'+x[1]+'" '+(x[0]==="n"||x[0]==="bc"?"":'inputmode="decimal"')+' style="margin-top:6px;text-align:right">').join("")+'<button class="btn" id="cfs">احفظ الأكلة</button>'}
@@ -494,7 +526,7 @@ function saveCust(){const o={};document.querySelectorAll("[data-cf]").forEach(i=
  if(!o.n||o.kcal===""){SH.msg="اكتب الاسم والسعرات على الأقل.";return drawSheet()}
  S.cf.push({n:o.n,src:"c",p:vec(o),por:[],bc:o.bc||""});xmark();SH.mode="s";SH.q=o.n;SH.msg="";drawSheet()}
 async function onPhoto(file){
- const m=SH.mode;SH.msg="";SH.res=null;SH.busy="Claude بيقرا الصورة...";drawSheet();
+ const m=SH.mode;SH.msg="";SH.res=null;SH.busy="Gemini بيقرا الصورة...";drawSheet();
  try{
   if(m==="l"){const r=await ai('Read this nutrition facts label. Return JSON only: {"name":string,"barcode":string|null,"serving_g":number|null,"per100":{keys}} where keys use exactly these names: '+KL+'. All per100 values must be per 100 g of product (convert from per-serving using serving_g if the label is per serving). Units: kcal, grams for p f c fib sug sat mono poly o3, mg for chol na k ca fe mg ph zn cu mn vC b1 b2 b3 b6 b5 vE, micrograms for se vA fol b12 vD vK. Use null for anything not printed. Never guess values that are not on the label.',file);
    SH.res={type:"l",name:r.name||"",bc:r.barcode||"",sg:r.serving_g||"",v:r.per100||{}}}
@@ -543,7 +575,7 @@ function candsFor(x){
  return out.map((c,i)=>({c:c,i:i,o:ov(c)})).sort((a,b)=>b.o-a.o||(a.c.src==="e"?0:1)-(b.c.src==="e"?0:1)||a.i-b.i).slice(0,5).map(z=>z.c)}
 async function aiFoods(desc,file){
  if(!file&&!desc.trim()){SH.msg="اكتب وصف الأكلة الأول.";return drawSheet()}
- SH.busy="Claude بيحدد الأكلات...";SH.msg="";drawSheet();
+ SH.busy="Gemini بيحدد الأكلات...";SH.msg="";drawSheet();
  try{const r=await ai('Identify the foods '+(file?'in this photo':'described here: '+desc)+'. Egyptian and Middle Eastern dishes are common. Return JSON only: {"items":[{"name_en":"short generic English food name like \'rice, white, cooked\' or \'chicken breast, grilled\'","name_ar":"Arabic name","grams":number,"per100":{"kcal":number,"p":number,"f":number,"c":number,"fib":number}}]} where grams is your realistic estimate of the amount eaten and per100 is a rough fallback per 100 g. List each distinct food separately (rice, meat, salad, bread...). Be realistic, not optimistic.',file);
   const items=(r.items||[]).map(x=>{const c=candsFor(x);return{n:x.name_ar||x.name_en,g:+x.grams||100,v:x.per100||{},on:true,c:c,sel:c.length?0:-1}});
   SH.res={type:"a",items:items};SH.busy="";if(!items.length)SH.msg="مقدرتش أحدد أكلات. جرّب وصف أوضح.";drawSheet()}
@@ -611,6 +643,49 @@ function saveRec(){const R=SH.rec;
  const f={n:R.n.trim(),src:"c",p:recVec(R),por:[["طبق (1 من "+sv+")",Math.round(cw/sv)]],bc:"",rec:{sv:sv,cw:cw,ing:R.ing.map(x=>({n:x.n,g:x.g,m:x.m||"raw"}))}};
  S.cf.push(f);xmark();SH.rec=null;SH.msg="";pickFood(f)}
 
+// ---- my foods (edit / delete / portions) ----
+function drawMine(){
+ if(SH.ed!=null&&S.cf[SH.ed]){const f=S.cf[SH.ed],v=k=>f.p[NI[k]]>=0?f.p[NI[k]]:"";
+  return'<input id="un" value="'+esc(f.n)+'" style="text-align:right"><div class="meta" style="margin-top:6px">القيم لكل 100 جم</div><div class="grid">'+["kcal","p","c","f","fib","na"].map(k=>'<label class="meta">'+LBL[k]+'<input data-uv="'+k+'" inputmode="decimal" value="'+v(k)+'"></label>').join("")+'</div><div class="meta" style="margin-top:8px">الحصص</div>'+(f.por||[]).map((x,i)=>'<div class="row"><span>'+esc(x[0])+' ('+x[1]+' جم)</span><button class="x" data-up="'+i+'">حذف</button></div>').join("")+'<div class="grid" style="margin-top:6px"><input id="upn" placeholder="اسم الحصة (مثلاً رغيف)" style="text-align:right"><input id="upg" inputmode="decimal" placeholder="جرامات"></div><button class="btn g" id="upa">أضف حصة</button><button class="btn" id="usv">احفظ</button><button class="btn g" id="udl">احذف الأكلة</button><button class="btn g" id="ubk">رجوع</button>'}
+ return S.cf.length?S.cf.map((f,i)=>'<div class="row rs" data-ue="'+i+'"><span>'+esc(f.n)+'<br><span class="meta">'+(SRC[f.src]||"")+(f.rec?" · وصفة":"")+(f.bc?" · باركود "+esc(f.bc):"")+'</span></span><span class="meta">'+kc(f.p,100)+' سعر/100جم</span></div>').join(""):'<p class="meta">لسه مفيش أكلات خاصة. الوصفات والملصقات والأكلات اللي بتحفظها بتظهر هنا، وتقدر تعدّلها وتحذفها.</p>'}
+function wireMine(){
+ const c=$("shc");
+ c.querySelectorAll("[data-ue]").forEach(r=>r.onclick=()=>{SH.ed=+r.dataset.ue;SH.msg="";drawSheet()});
+ if(SH.ed==null||!S.cf[SH.ed])return;
+ const f=S.cf[SH.ed];
+ const base=()=>{f.n=$("un").value.trim()||f.n;document.querySelectorAll("[data-uv]").forEach(i=>{const k=i.dataset.uv,v=i.value.trim();f.p[NI[k]]=v===""?-1:+v})};
+ c.querySelectorAll("[data-up]").forEach(b=>b.onclick=()=>{base();f.por.splice(+b.dataset.up,1);xmark();drawSheet()});
+ $("upa").onclick=()=>{const n=$("upn").value.trim(),g=+$("upg").value;if(!n||!(g>0)){base();SH.msg="اكتب اسم الحصة وجراماتها.";return drawSheet()}base();f.por=f.por||[];f.por.push([n,g]);xmark();SH.msg="";drawSheet()};
+ $("usv").onclick=()=>{base();xmark();SH.ed=null;SH.msg="";drawSheet()};
+ let sure=0;$("udl").onclick=()=>{if(!sure){sure=1;$("udl").textContent="تأكيد الحذف؟";return}S.cf.splice(SH.ed,1);xmark();SH.ed=null;drawSheet()};
+ $("ubk").onclick=()=>{SH.ed=null;drawSheet()}}
+// ---- weekly muscle sets ----
+function weekBox(){
+ const t0=shiftDay(today(),-6),done={},plan={};
+ Object.keys(S.sess).forEach(k=>{const s=S.sess[k];if(s.d<t0||s.d>today())return;Object.keys(s.ex||{}).forEach(i=>{const e=s.ex[i],g=grp(e.n);done[g]=(done[g]||0)+(e.sets||[]).filter(x=>+x.r>0).length})});
+ S.plan.forEach(d=>d.x.forEach(e=>{const g=grp(e[0]);plan[g]=(plan[g]||0)+(+e[2]||0)}));
+ const d=document.createElement("details");
+ d.innerHTML='<summary>المجموعات الأسبوعية لكل عضلة (آخر 7 أيام)</summary>'+Object.keys(G).filter(g=>plan[g]||done[g]).map(g=>'<div class="mrow"><span>'+G[g][0]+'</span><span>'+(done[g]||0)+' / '+(plan[g]||0)+' مخطط</span></div>'+bar(done[g]||0,Math.max(plan[g]||0,1))).join("")+'<p class="meta">بيحسب المجموعات اللي سجّلت فيها عدات بس. "دراع" بتشمل البايسبس والترايسبس. التوصيات العامة للتضخيم حوالي 10–20 مجموعة أسبوعيًا لكل عضلة.</p>';
+ return d}
+// ---- weekly micros + suggestions ----
+function sugg(k,r){const i=NI[k],c=[];
+ FD.f.forEach(f=>{const v=f[3][i];if(!(v>0)||!(f[3][0]>0)||f[3][0]>420)return;const cat=f[1]||"";
+  if(/^(توابل|مشروبات|متنوع|حلويات)$/.test(cat)||/Spices|Fats and Oils|Beverages|Sweets|Soups|Baby/i.test(cat))return;
+  c.push({n:f[5]||f[0],pc:v/r*100,s:f[2]==="e"?1.3:1})});
+ c.sort((a,b)=>b.pc*b.s-a.pc*a.s);return c.slice(0,3)}
+function microWeek(){
+ const rd=S.prof.sex==="f"?RDA_F:RDA_M,ds=Object.keys(S.nut).sort().filter(k=>k<=today()&&S.nut[k].items.length).slice(-7);
+ let h='<details><summary>الميكروز: متوسط الأسبوع واقتراحات</summary>';
+ if(ds.length<3)return h+'<p class="meta">سجّل أكلك 3 أيام على الأقل عشان يظهر المتوسط.</p></details>';
+ const sum={},has={};
+ ds.forEach(k=>{const T=tot(S.nut[k].items);KEYS.forEach((key,i)=>{sum[key]=(sum[key]||0)+T.t[i];if(T.h[i])has[key]=1})});
+ const rows=Object.keys(rd).filter(k=>has[k]).map(k=>({k:k,p:sum[k]/ds.length/rd[k]*100}));
+ h+='<div class="meta">متوسط '+ds.length+' أيام مسجّلة، كنسبة من الاحتياج التقريبي</div>'+rows.map(x=>'<div class="mrow"><span>'+LBL[x.k]+'</span><span>'+Math.round(x.p)+'%'+(LIM[x.k]&&x.p>100?" (أعلى من الحد)":"")+'</span></div>'+bar(x.p,100,LIM[x.k]&&x.p>100?"lo":"")).join("");
+ const low=rows.filter(x=>!LIM[x.k]&&x.p<70).sort((a,b)=>a.p-b.p).slice(0,3);
+ if(low.length)h+='<p class="warn">أقل من 70% من احتياجك: '+low.map(x=>LBL[x.k]).join("، ")+'</p><div class="meta">أغذية تركيز العنصر فيها عالي (النسبة من احتياج اليوم في 100 جم):</div>'+low.map(x=>'<p><b>'+LBL[x.k]+'</b>: '+sugg(x.k,rd[x.k]).map(s=>esc(s.n)+" ("+(s.pc>300?">300":Math.round(s.pc))+"%)").join("، ")+'</p>').join("");
+ else h+='<p class="meta">مفيش عنصر واضح تحت 70%.</p>';
+ return h+'<p class="meta">النسب تقريبية. العناصر اللي مالهاش بيانات في الأصناف اللي سجّلتها ممكن تظهر أقل من الحقيقي.</p></details>'}
+
 // ---- main view ----
 function bar(v,t,cls){const p=t?Math.min(100,v/t*100):0;return'<div class="bar"><i class="'+(cls||"")+'" style="width:'+p+'%"></i></div>'}
 function nutView(app){
@@ -629,6 +704,7 @@ function nutView(app){
  h+='<details><summary>الميكروز النهارده (تقريبية للبالغين)</summary>'+Object.keys(rd).map(k=>{const v=g(k),has=T.h[NI[k]],lim=LIM[k];return'<div class="mrow"><span>'+LBL[k]+(has?"":" (مفيش بيانات)")+'</span><span>'+(Math.round(v*10)/10)+' / '+(lim?"حد ":"")+rd[k]+' '+(UN[k]||"")+'</span></div>'+bar(v,rd[k],lim&&v>rd[k]?"lo":"")}).join("")+'<p class="meta">الأصناف اللي مفيهاش قيمة لعنصر معين بتتحسب صفر في العنصر ده. فالأرقام ممكن تكون أقل من الحقيقي.</p></details>';
  h+='<details><summary>الأهداف والبيانات</summary><div class="grid">'+[["sex","النوع",""],["age","السن",P.age],["h","الطول سم",P.h],["w","الوزن كجم",P.w||lastBody().w||""],["bf","دهون % (من InBody)",P.bf||lastBody().f||""],["ok","سعرات (تعديل يدوي)",P.ok||""],["op","بروتين جم",P.op||""],["oc","كارب جم",P.oc||""],["of","دهون جم",P.of||""]].map(x=>x[0]==="sex"?'<label class="meta">النوع<select data-pf="sex"><option value="m"'+(P.sex!=="f"?" selected":"")+'>ذكر</option><option value="f"'+(P.sex==="f"?" selected":"")+'>أنثى</option></select></label>':'<label class="meta">'+x[1]+'<input data-pf="'+x[0]+'" inputmode="decimal" value="'+esc(x[2]||"")+'"></label>').join("")+'<label class="meta">الهدف<select data-pf="goal"><option value="bulk"'+(P.goal!=="cut"&&P.goal!=="keep"?" selected":"")+'>تضخيم</option><option value="cut"'+(P.goal==="cut"?" selected":"")+'>تنشيف</option><option value="keep"'+(P.goal==="keep"?" selected":"")+'>ثبات</option></select></label><label class="meta">النشاط<select data-pf="act"><option value="1.375"'+(P.act==1.375?" selected":"")+'>3 تمرينات/أسبوع</option><option value="1.55"'+(!P.act||P.act==1.55?" selected":"")+'>4–5 تمرينات</option><option value="1.725"'+(P.act==1.725?" selected":"")+'>6–7 تمرينات</option></select></label></div>'+(tg&&tg.hint?'<p class="warn">'+esc(tg.hint)+'</p>':"")+(tg?'<p class="meta">الحساب: معدل الحرق الأساسي '+tg.bmr+' سعر، والحرق اليومي ~'+tg.tdee+'. تقدير بمعادلات معروفة (Katch-McArdle لو دخلت الدهون %، وإلا Mifflin-St Jeor). عدّله بالتجربة، ومش بديل لأخصائي تغذية.</p>':"")+'</details>';
  h+='<details><summary>مراجعة أسبوعية</summary>'+review(tg)+'</details>';
+ h+=microWeek();
  app.innerHTML=h;
  $("dp").onclick=()=>{S.nd=shiftDay(d,-1);render()};$("dn").onclick=()=>{S.nd=shiftDay(d,1);render()};
  const wm=n=>{D.w=Math.max(0,(D.w||0)+n);nmark(d);render()};$("w1").onclick=()=>wm(250);$("w2").onclick=()=>wm(500);$("w0").onclick=()=>wm(-250);
@@ -659,7 +735,6 @@ function review(tg){
 
 render();
 setTimeout(cloud,0);
-if("serviceWorker" in navigator&&location.protocol.indexOf("http")===0)navigator.serviceWorker.register("sw.js").catch(()=>{});
 </script>
 </body>
 </html>
