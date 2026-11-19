@@ -116,7 +116,7 @@ service cloud.firestore {
     function isValidCustomFood(data, userId) {
       return data.userId is string && data.userId == userId &&
              data.name is string && data.name.size() >= 1 && data.name.size() <= 200 &&
-             data.source in ['c', 'l', 'a', 'e', 'u', 's'] &&
+             data.source in ['c', 'l', 'a', 'e', 'u', 's', 'f'] &&
              data.barcode is string && data.barcode.size() <= 64 &&
              data.refusePercent is number && data.refusePercent >= 0 && data.refusePercent <= 100 &&
              data.favorite is bool &&

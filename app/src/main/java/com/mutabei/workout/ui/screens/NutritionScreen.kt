@@ -58,9 +58,16 @@ import com.mutabei.workout.data.model.daysBetweenIso
 import com.mutabei.workout.data.model.shiftIsoDate
 import com.mutabei.workout.data.model.todayIso
 import com.mutabei.workout.data.repository.NutrientFoodSuggestion
+import com.mutabei.workout.ui.components.AdaptiveTdeeSection
+import com.mutabei.workout.ui.components.AiDeficiencyFixerBlock
 import com.mutabei.workout.ui.components.ExpandableSectionCard
+import com.mutabei.workout.ui.components.MealLeucineMpsChip
 import com.mutabei.workout.ui.components.MetricProgressBar
+import com.mutabei.workout.ui.components.SaveMealPresetDialog
+import com.mutabei.workout.ui.components.computeAdaptiveTdee
+import com.mutabei.workout.ui.components.computeMealLeucineStatus
 import com.mutabei.workout.ui.theme.LocalSemanticColors
+import com.mutabei.workout.ui.viewmodel.AiDeficiencyUiState
 import com.mutabei.workout.ui.viewmodel.AppDataSnapshot
 import com.mutabei.workout.ui.viewmodel.FoodSheetAiState
 import com.mutabei.workout.ui.viewmodel.MainViewModel
@@ -74,6 +81,7 @@ fun NutritionScreen(
     searchResults: List<com.mutabei.workout.data.model.FoodItem>,
     aiState: FoodSheetAiState,
     microSuggestions: Map<String, List<NutrientFoodSuggestion>>,
+    deficiencyAi: AiDeficiencyUiState,
     viewModel: MainViewModel
 ) {
     val semantic = LocalSemanticColors.current
@@ -109,6 +117,7 @@ fun NutritionScreen(
 
     var addSheetMealIndex by remember { mutableStateOf<Int?>(null) }
     var editingItem by remember { mutableStateOf<LoggedFoodItem?>(null) }
+    var savingPresetMeal by remember { mutableStateOf<Pair<String, List<LoggedFoodItem>>?>(null) }
 
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
@@ -284,11 +293,16 @@ fun NutritionScreen(
                                 text = if (isSupplementSection && mealKcal < 1.0) {
                                     "${mealItems.size} صنف"
                                 } else {
-                                    "${mealKcal.roundToInt()} سعر"
+                                    "${mealKcal.roundToInt()} سعر · ${mealItems.sumOf { it.nutrientAmount("p") }.roundToInt()} جم بروتين"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+                        if (!isSupplementSection && mealItems.isNotEmpty()) {
+                            val leuStatus = remember(mealItems) { computeMealLeucineStatus(mealItems) }
+                            Spacer(Modifier.height(4.dp))
+                            MealLeucineMpsChip(status = leuStatus)
                         }
                         if (isSupplementSection && mealItems.isEmpty()) {
                             Spacer(Modifier.height(4.dp))
@@ -336,13 +350,27 @@ fun NutritionScreen(
                             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
                         }
                         Spacer(Modifier.height(8.dp))
-                        Button(
-                            onClick = { addSheetMealIndex = mealIdx },
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                            modifier = Modifier.testTag("add_food_meal_$mealIdx")
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Rounded.Add, contentDescription = null)
-                            Text(if (isSupplementSection) "أضف مكمل / فيتامين" else "أضف")
+                            Button(
+                                onClick = { addSheetMealIndex = mealIdx },
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                                modifier = Modifier.testTag("add_food_meal_$mealIdx")
+                            ) {
+                                Icon(Icons.Rounded.Add, contentDescription = null)
+                                Text(if (isSupplementSection) "أضف مكمل / فيتامين" else "أضف")
+                            }
+                            if (!isSupplementSection && mealItems.isNotEmpty()) {
+                                OutlinedButton(
+                                    onClick = { savingPresetMeal = mealName to mealItems },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                    modifier = Modifier.testTag("save_meal_preset_$mealIdx")
+                                ) {
+                                    Text("حفظ كوجبة جاهزة", style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
                         }
                     }
                 }
@@ -451,20 +479,41 @@ fun NutritionScreen(
                 NutritionGoalsCard(snapshot = snapshot, targets = targets, viewModel = viewModel)
             }
 
-            // Weekly Review
+            // Weekly Review + Adaptive TDEE
             item(key = "weekly_review") {
-                WeeklyReviewCard(snapshot = snapshot, targets = targets)
+                WeeklyReviewCard(
+                    snapshot = snapshot,
+                    targets = targets,
+                    onApplyAdaptiveKcal = viewModel::applyAdaptiveKcal
+                )
             }
 
-            // Weekly Micros + Suggestions
+            // Weekly Micros + Offline & Gemini AI Suggestions
             item(key = "weekly_micros") {
+                val remKcal = targets?.let { (it.kcal - totalOf("kcal")).roundToInt().coerceAtLeast(0) }
                 WeeklyMicrosCard(
                     snapshot = snapshot,
                     suggestions = microSuggestions,
-                    onNeedSuggestions = { lowKeys -> viewModel.loadMicroSuggestions(lowKeys, snapshot.config.sex) }
+                    deficiencyAi = deficiencyAi,
+                    onNeedSuggestions = { lowKeys -> viewModel.loadMicroSuggestions(lowKeys, snapshot.config.sex) },
+                    onRequestAiFix = { lowPairs -> viewModel.requestDeficiencyAiAdvice(lowPairs, remKcal) }
                 )
             }
         }
+    }
+
+    if (savingPresetMeal != null) {
+        val (mName, mItems) = savingPresetMeal!!
+        SaveMealPresetDialog(
+            defaultMealName = mName,
+            itemCount = mItems.size,
+            totalKcal = mItems.sumOf { it.nutrientAmount("kcal") }.roundToInt(),
+            onDismiss = { savingPresetMeal = null },
+            onSave = { presetName ->
+                viewModel.saveMealAsPreset(presetName, mItems)
+                savingPresetMeal = null
+            }
+        )
     }
 
     // Add Food Bottom Sheet
@@ -733,21 +782,31 @@ private fun NutritionGoalsCard(
 @Composable
 private fun WeeklyReviewCard(
     snapshot: AppDataSnapshot,
-    targets: NutritionTargets?
+    targets: NutritionTargets?,
+    onApplyAdaptiveKcal: (Int) -> Unit
 ) {
     val semantic = LocalSemanticColors.current
     val loggedDays = snapshot.nutritionDays.values
         .filter { it.items.isNotEmpty() }
         .sortedBy { it.date }
         .takeLast(7)
+    val adaptiveTdee = remember(snapshot.nutritionDays, snapshot.bodyRecords, snapshot.config.goal) {
+        computeAdaptiveTdee(snapshot.nutritionDays, snapshot.bodyRecords, snapshot.config.goal)
+    }
 
     ExpandableSectionCard(
-        title = "مراجعة أسبوعية",
+        title = "مراجعة أسبوعية وحرقك الفعلي (Adaptive TDEE)",
         testTag = "weekly_review_card"
     ) {
+        AdaptiveTdeeSection(
+            estimate = adaptiveTdee,
+            theoreticalTargets = targets,
+            onApplyRecommendedKcal = onApplyAdaptiveKcal
+        )
+        Spacer(Modifier.height(10.dp))
         if (loggedDays.size < 3) {
             Text(
-                text = "سجّل أكلك 3 أيام على الأقل عشان تظهر مراجعة.",
+                text = "سجّل أكلك 3 أيام على الأقل عشان تظهر المراجعة الأسبوعية.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -815,7 +874,9 @@ private fun WeeklyReviewCard(
 private fun WeeklyMicrosCard(
     snapshot: AppDataSnapshot,
     suggestions: Map<String, List<NutrientFoodSuggestion>>,
-    onNeedSuggestions: (List<String>) -> Unit
+    deficiencyAi: AiDeficiencyUiState,
+    onNeedSuggestions: (List<String>) -> Unit,
+    onRequestAiFix: (List<Pair<String, Double>>) -> Unit
 ) {
     val semantic = LocalSemanticColors.current
     val today = todayIso()
@@ -917,6 +978,19 @@ private fun WeeklyMicrosCard(
                     )
                 }
             }
+            Spacer(Modifier.height(10.dp))
+            AiDeficiencyFixerBlock(
+                busyMessage = deficiencyAi.busyMessage,
+                errorMessage = deficiencyAi.errorMessage,
+                result = deficiencyAi.result,
+                onRequestFix = {
+                    val allLow = rows
+                        .filter { (k, pct) -> k !in NutritionConstants.LIMIT_KEYS && pct < 75.0 }
+                        .sortedBy { it.second }
+                        .take(6)
+                    onRequestAiFix(allLow)
+                }
+            )
         } else {
             Text(
                 text = "مفيش عنصر واضح تحت 70%.",

@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.MonitorWeight
 import androidx.compose.material.icons.rounded.Restaurant
@@ -85,6 +86,7 @@ import com.mutabei.workout.data.repository.FirestoreRepository
 import com.mutabei.workout.data.repository.GeminiAiRepository
 import com.mutabei.workout.data.repository.OfflineFoodRepository
 import com.mutabei.workout.data.repository.OpenFoodFactsRepository
+import com.mutabei.workout.ui.components.AiWeeklyCoachDialog
 import com.mutabei.workout.ui.components.RestTimerFab
 import com.mutabei.workout.ui.components.RestTimerOverlay
 import com.mutabei.workout.ui.screens.AuthScreen
@@ -94,6 +96,7 @@ import com.mutabei.workout.ui.screens.SettingsSheet
 import com.mutabei.workout.ui.screens.WorkoutScreen
 import com.mutabei.workout.ui.theme.LocalSemanticColors
 import com.mutabei.workout.ui.theme.MutabeiTheme
+import com.mutabei.workout.ui.viewmodel.AiDeficiencyUiState
 import com.mutabei.workout.ui.viewmodel.AppDataSnapshot
 import com.mutabei.workout.ui.viewmodel.MainTab
 import com.mutabei.workout.ui.viewmodel.MainViewModel
@@ -193,12 +196,15 @@ private fun MainAppShell(user: FirebaseUser) {
     val foodSheetAi by viewModel.foodSheetAi.collectAsStateWithLifecycle()
     val bodyDraft by viewModel.bodyDraft.collectAsStateWithLifecycle()
     val microSuggestions by viewModel.microSuggestions.collectAsStateWithLifecycle()
+    val deficiencyAi by viewModel.deficiencyAi.collectAsStateWithLifecycle()
+    val coachReport by viewModel.coachReport.collectAsStateWithLifecycle()
 
     val isOnlineFlow = remember(context) { observeNetworkStatus(context) }
     val isOnline by isOnlineFlow.collectAsStateWithLifecycle(initialValue = true)
 
     val snackbarHostState = remember { SnackbarHostState() }
     var showSettingsSheet by remember { mutableStateOf(false) }
+    var showCoachDialog by remember { mutableStateOf(false) }
 
     val snapshot = (dataState as? UiState.Success)?.data
     val themeMode = snapshot?.config?.themeMode ?: "system"
@@ -228,6 +234,16 @@ private fun MainAppShell(user: FirebaseUser) {
                 config = snapshot.config,
                 viewModel = viewModel,
                 onDismiss = { showSettingsSheet = false }
+            )
+        }
+
+        if (showCoachDialog && snapshot != null) {
+            AiWeeklyCoachDialog(
+                busyMessage = coachReport.busyMessage,
+                errorMessage = coachReport.errorMessage,
+                report = coachReport.report,
+                onGenerate = viewModel::requestWeeklyCoachReport,
+                onDismiss = { showCoachDialog = false }
             )
         }
 
@@ -285,6 +301,18 @@ private fun MainAppShell(user: FirebaseUser) {
                                 }
                             },
                             actions = {
+                                if (snapshot != null) {
+                                    IconButton(
+                                        onClick = { showCoachDialog = true },
+                                        modifier = Modifier.testTag("ai_coach_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.AutoAwesome,
+                                            contentDescription = "المدرب الذكي الشامل",
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
                                 IconButton(
                                     onClick = { showSettingsSheet = true },
                                     modifier = Modifier.testTag("settings_button")
@@ -395,6 +423,7 @@ private fun MainAppShell(user: FirebaseUser) {
                                         foodSheetAi = foodSheetAi,
                                         bodyDraft = bodyDraft,
                                         microSuggestions = microSuggestions,
+                                        deficiencyAi = deficiencyAi,
                                         viewModel = viewModel
                                     )
                                 }
@@ -439,6 +468,7 @@ private fun ActiveTabContent(
     foodSheetAi: com.mutabei.workout.ui.viewmodel.FoodSheetAiState,
     bodyDraft: com.mutabei.workout.ui.viewmodel.BodyDraftState,
     microSuggestions: Map<String, List<com.mutabei.workout.data.repository.NutrientFoodSuggestion>>,
+    deficiencyAi: AiDeficiencyUiState,
     viewModel: MainViewModel
 ) {
     when (tab) {
@@ -455,6 +485,7 @@ private fun ActiveTabContent(
             searchResults = searchResults,
             aiState = foodSheetAi,
             microSuggestions = microSuggestions,
+            deficiencyAi = deficiencyAi,
             viewModel = viewModel
         )
 

@@ -13,8 +13,11 @@ import com.google.firebase.ai.type.generationConfig
 import com.google.firebase.ai.type.thinkingConfig
 import com.google.firebase.appcheck.FirebaseAppCheck
 import com.mutabei.workout.appCheckInitSummary
+import com.mutabei.workout.data.model.AiDeficiencyFixResult
+import com.mutabei.workout.data.model.AiDeficiencySuggestion
 import com.mutabei.workout.data.model.AiDetectedFoodRaw
 import com.mutabei.workout.data.model.AiLabelResult
+import com.mutabei.workout.data.model.AiWeeklyCoachReport
 import com.mutabei.workout.data.model.BodyRecord
 import com.mutabei.workout.data.model.NutritionConstants
 import com.mutabei.workout.data.model.todayIso
@@ -259,6 +262,48 @@ class GeminiAiRepository {
 
     private val barcodePrimary by lazy { buildModel(PRIMARY_MODEL_NAME, barcodeSchema, 0.0f, ThinkingLevel.LOW) }
     private val barcodeFallback by lazy { buildModel(FALLBACK_MODEL_NAME, barcodeSchema, 0.0f, thinking = null) }
+
+    private val deficiencyFixSchema: Schema by lazy {
+        val suggestionSchema = Schema.obj(
+            properties = mapOf(
+                "food_name_ar" to Schema.string(description = "Practical Egyptian/local food name in Arabic"),
+                "serving_grams" to Schema.integer(description = "Recommended realistic serving in grams"),
+                "approx_kcal" to Schema.integer(description = "Approximate calories for this serving"),
+                "covers_nutrients" to Schema.array(
+                    items = Schema.string(),
+                    description = "Arabic names of the deficient nutrients this food fixes"
+                ),
+                "note" to Schema.string(description = "Short practical tip in Egyptian Arabic")
+            )
+        )
+        Schema.obj(
+            properties = mapOf(
+                "summary" to Schema.string(description = "One-sentence Arabic coaching summary"),
+                "suggestions" to Schema.array(
+                    items = suggestionSchema,
+                    description = "4 to 5 readily available Egyptian foods that close the micronutrient gaps"
+                )
+            )
+        )
+    }
+
+    private val weeklyCoachSchema: Schema by lazy {
+        Schema.obj(
+            properties = mapOf(
+                "overall_score" to Schema.integer(description = "Overall adherence and progression score from 0 to 100"),
+                "headline" to Schema.string(description = "Sharp 1-sentence Egyptian Arabic summary headline"),
+                "wins" to Schema.array(items = Schema.string(), description = "2 to 3 concrete wins based on the numbers"),
+                "attention_needed" to Schema.array(items = Schema.string(), description = "2 to 3 concrete bottlenecks or gaps"),
+                "next_week_actions" to Schema.array(items = Schema.string(), description = "3 specific numeric action items for next week")
+            )
+        )
+    }
+
+    private val deficiencyPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, deficiencyFixSchema, 0.25f, ThinkingLevel.LOW) }
+    private val deficiencyFallback by lazy { buildModel(FALLBACK_MODEL_NAME, deficiencyFixSchema, 0.25f, thinking = null) }
+
+    private val coachPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, weeklyCoachSchema, 0.25f, ThinkingLevel.LOW) }
+    private val coachFallback by lazy { buildModel(FALLBACK_MODEL_NAME, weeklyCoachSchema, 0.25f, thinking = null) }
 
     suspend fun parseInBodySheet(
         bitmap: Bitmap,
@@ -557,6 +602,103 @@ class GeminiAiRepository {
         val json = JSONObject(rawText)
         val digits = if (json.isNull("digits")) "" else json.optString("digits", "").filter { it.isDigit() }
         digits.ifBlank { null }
+    }
+
+    suspend fun suggestDeficiencyFoods(
+        deficientSummary: String,
+        goal: String,
+        remainingKcal: Int?,
+        onProgress: (String) -> Unit = {}
+    ): Result<AiDeficiencyFixResult> = runAiCall {
+        val goalLabel = when (goal) {
+            "cut" -> "تنشيف (أقل سعرات ممكنة)"
+            "keep" -> "ثبات وزن"
+            else -> "تضخيم عضلي نظيف"
+        }
+        val kcalHint = remainingKcal?.let { "متبقي اليوم حوالي $it سعر." } ?: ""
+        val prompt = """
+            أنت خبير تغذية رياضية في مصر.
+            المستخدم عنده نقص في العناصر الغذائية دي خلال آخر أسبوع (كنسبة من الاحتياج اليومي RDA):
+            $deficientSummary
+            هدف المستخدم: $goalLabel. $kcalHint
+            اقترح 4 إلى 5 أكلات مصرية حقيقية ومتوفرة بسهولة (مثل: سردين، ماكريل، كبدة، بيض، جبنة قريش، سبانخ، ملوخية، فول، عدس، بذور يقطين/سمسم/طحينة، زبادي، برتقال، جوافة، بطاطا، شوفان) تسد أكبر قدر من العجز ده بأعلى كثافة غذائية وأقل سعرات.
+            اكتب كل شيء بالعربية المصرية الواضحة والعملية، وحدد الجرامات والسعرات التقريبية بدقة.
+        """.trimIndent()
+
+        val rawText = executeTextJson(
+            prompt = prompt,
+            taskLabel = "اقتراحات سد نقص الميكروز",
+            primaryModel = deficiencyPrimary,
+            fallbackModel = deficiencyFallback,
+            onProgress = onProgress
+        )
+        val json = JSONObject(rawText)
+        val arr = json.optJSONArray("suggestions")
+        val list = mutableListOf<AiDeficiencySuggestion>()
+        if (arr != null) {
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val coversArr = o.optJSONArray("covers_nutrients")
+                val covers = mutableListOf<String>()
+                if (coversArr != null) {
+                    for (j in 0 until coversArr.length()) {
+                        val c = coversArr.optString(j, "").trim()
+                        if (c.isNotBlank()) covers.add(c)
+                    }
+                }
+                list.add(
+                    AiDeficiencySuggestion(
+                        foodNameAr = o.optString("food_name_ar", "").trim(),
+                        servingGrams = o.optInt("serving_grams", 100).coerceIn(5, 1000),
+                        approxKcal = o.optInt("approx_kcal", 0).coerceAtLeast(0),
+                        coversNutrients = covers,
+                        note = o.optString("note", "").trim()
+                    )
+                )
+            }
+        }
+        AiDeficiencyFixResult(
+            summary = json.optString("summary", "خيارات مصرية سريعة لسد العجز:").trim(),
+            suggestions = list
+        )
+    }
+
+    suspend fun generateWeeklyCoachReport(
+        athleteContextSummary: String,
+        onProgress: (String) -> Unit = {}
+    ): Result<AiWeeklyCoachReport> = runAiCall {
+        val prompt = """
+            أنت مدرب كمال أجسام وأخصائي تغذية رياضية محترف (معتمد على العلم: Hypertrophy, Progressive Overload, MPS Leucine Threshold, Adaptive TDEE, InBody analysis).
+            اقرأ بيانات اللاعب الحقيقية دي من آخر أسبوع وآخر قياسات InBody بدقة:
+            $athleteContextSummary
+
+            اعمل تحليل أسبوعي حاد، عملي، ومباشر جدًا باللهجة المصرية المحترمة، مبني فقط على الأرقام الموجودة:
+            - overall_score: تقييم من 0 إلى 100 للأسبوع.
+            - headline: جملة واحدة قوية تلخص حالة الأسبوع.
+            - wins: 2 إلى 3 نقاط قوة حقيقية من أرقامه.
+            - attention_needed: 2 إلى 3 مشاكل أو فجوات حقيقية (حجم عضلة ناقص، نقص مايكرو، ثبات وزن، عدم تناسق يمين/يسار إن وجد).
+            - next_week_actions: 3 خطوات عملية محددة بالأرقام للأسبوع الجاي.
+        """.trimIndent()
+
+        val rawText = executeTextJson(
+            prompt = prompt,
+            taskLabel = "تقرير المدرب الذكي",
+            primaryModel = coachPrimary,
+            fallbackModel = coachFallback,
+            onProgress = onProgress
+        )
+        val json = JSONObject(rawText)
+        fun readStrings(key: String): List<String> {
+            val a = json.optJSONArray(key) ?: return emptyList()
+            return (0 until a.length()).mapNotNull { i -> a.optString(i, "").trim().takeIf { it.isNotBlank() } }
+        }
+        AiWeeklyCoachReport(
+            overallScore = json.optInt("overall_score", 75).coerceIn(0, 100),
+            headline = json.optString("headline", "ملخص أسبوعك التدريبي والغذائي").trim(),
+            wins = readStrings("wins"),
+            attentionNeeded = readStrings("attention_needed"),
+            nextWeekActions = readStrings("next_week_actions")
+        )
     }
 
     private suspend fun executeMultimodalJson(

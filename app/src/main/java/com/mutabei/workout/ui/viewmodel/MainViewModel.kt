@@ -5,8 +5,10 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.mutabei.workout.data.model.AiDeficiencyFixResult
 import com.mutabei.workout.data.model.AiFoodReviewItem
 import com.mutabei.workout.data.model.AiLabelResult
+import com.mutabei.workout.data.model.AiWeeklyCoachReport
 import com.mutabei.workout.data.model.BodyRecord
 import com.mutabei.workout.data.model.CustomFood
 import com.mutabei.workout.data.model.ExerciseSpec
@@ -132,6 +134,18 @@ data class ExerciseHistoryPoint(
     fun topE1Rm(): Double = sets.maxOfOrNull { it.estimated1Rm() } ?: 0.0
 }
 
+data class AiDeficiencyUiState(
+    val busyMessage: String? = null,
+    val errorMessage: String? = null,
+    val result: AiDeficiencyFixResult? = null
+)
+
+data class AiCoachUiState(
+    val busyMessage: String? = null,
+    val errorMessage: String? = null,
+    val report: AiWeeklyCoachReport? = null
+)
+
 class MainViewModel(
     private val firestoreRepo: FirestoreRepository,
     private val offlineFoodRepo: OfflineFoodRepository,
@@ -202,6 +216,13 @@ class MainViewModel(
     // Weekly micro suggestions cache
     private val _microSuggestions = MutableStateFlow<Map<String, List<NutrientFoodSuggestion>>>(emptyMap())
     val microSuggestions: StateFlow<Map<String, List<NutrientFoodSuggestion>>> = _microSuggestions.asStateFlow()
+
+    // Pro AI Features: Micronutrient Deficiency Fixer & Holistic Weekly Coach
+    private val _deficiencyAi = MutableStateFlow(AiDeficiencyUiState())
+    val deficiencyAi: StateFlow<AiDeficiencyUiState> = _deficiencyAi.asStateFlow()
+
+    private val _coachReport = MutableStateFlow(AiCoachUiState())
+    val coachReport: StateFlow<AiCoachUiState> = _coachReport.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -329,6 +350,19 @@ class MainViewModel(
             )
             map + (key to current)
         }
+    }
+
+    fun prefillWeightsFromLastSession(dayIndex: Int, exIndex: Int, setCount: Int, lastSets: List<SetEntry>, suggestedWeightKg: Double? = null) {
+        val key = "$dayIndex|$exIndex"
+        val suggestedStr = suggestedWeightKg?.let { w ->
+            if (w % 1.0 == 0.0) w.toInt().toString() else w.toString()
+        }
+        val filled = List(setCount) { idx ->
+            val prevW = lastSets.getOrNull(idx)?.weight?.ifBlank { lastSets.firstOrNull()?.weight.orEmpty() }.orEmpty()
+            SetEntry(weight = suggestedStr ?: prevW, reps = "")
+        }
+        _workoutDrafts.update { it + (key to filled) }
+        showToast(if (suggestedStr != null) "تم ملء الوزن المقترح ($suggestedStr كجم) 💪" else "تم نسخ أوزان آخر جلسة ✅")
     }
 
     fun saveExerciseLog(dayIndex: Int, exIndex: Int, exerciseName: String, sets: List<SetEntry>) {
@@ -622,6 +656,189 @@ class MainViewModel(
                 }
             }
             if (changed) _microSuggestions.value = current
+        }
+    }
+
+    fun applyAdaptiveKcal(recommendedKcal: Int) {
+        val cfg = currentSnapshot().config
+        updateConfig(cfg.copy(kcalOverride = recommendedKcal.coerceIn(1000, 8000)))
+        showToast("تم تطبيق الهدف الجديد: $recommendedKcal سعر ✅")
+    }
+
+    fun saveMealAsPreset(presetName: String, mealItems: List<LoggedFoodItem>) {
+        if (presetName.isBlank() || mealItems.isEmpty()) return
+        val totalGrams = mealItems.sumOf { it.grams }.coerceAtLeast(1.0)
+        val count = NutritionConstants.NUTRIENT_COUNT
+        val sum = DoubleArray(count)
+        val has = BooleanArray(count)
+        mealItems.forEach { item ->
+            item.nutrients.forEachIndexed { idx, v ->
+                if (idx < count && v >= 0.0) {
+                    sum[idx] += v * item.grams / 100.0
+                    has[idx] = true
+                }
+            }
+        }
+        val per100 = List(count) { idx ->
+            if (has[idx]) ((sum[idx] / totalGrams) * 100.0 * 100.0).roundToInt() / 100.0 else -1.0
+        }
+        val preset = CustomFood(
+            userId = currentUserId,
+            name = presetName.trim().take(200),
+            source = "c",
+            favorite = true,
+            custom = true,
+            nutrients = per100,
+            portions = listOf(PortionOption("الوجبة كاملة", (totalGrams * 10.0).roundToInt() / 10.0)),
+            recipeServings = 1,
+            recipeCookedWeight = (totalGrams * 10.0).roundToInt() / 10.0,
+            recipeIngredients = mealItems.take(50).map { RecipeIngredient(name = it.name, grams = it.grams, methodCode = "raw") }
+        )
+        saveCustomFood(preset)
+    }
+
+    fun requestDeficiencyAiAdvice(lowPairs: List<Pair<String, Double>>, remainingKcal: Int?) {
+        if (lowPairs.isEmpty()) {
+            showToast("مفيش عناصر ناقصة تحت 70% حاليًا — ممتاز!")
+            return
+        }
+        val summary = lowPairs.joinToString("\n") { (k, pct) ->
+            "- ${NutritionConstants.NUTRIENT_LABELS[k] ?: k}: ${pct.roundToInt()}% من الاحتياج اليومي"
+        }
+        val goal = currentSnapshot().config.goal
+        viewModelScope.launch {
+            _deficiencyAi.value = AiDeficiencyUiState(busyMessage = "Gemini بيختارلك أفضل أكلات مصرية لسد العجز...")
+            val res = geminiRepo.suggestDeficiencyFoods(summary, goal, remainingKcal) { stage ->
+                _deficiencyAi.update { it.copy(busyMessage = stage) }
+            }
+            res.fold(
+                onSuccess = { data ->
+                    _deficiencyAi.value = AiDeficiencyUiState(result = data)
+                },
+                onFailure = { e ->
+                    _deficiencyAi.value = AiDeficiencyUiState(errorMessage = e.message ?: "تعذّر الحصول على اقتراحات Gemini.")
+                }
+            )
+        }
+    }
+
+    fun requestWeeklyCoachReport() {
+        val snap = currentSnapshot()
+        val today = todayIso()
+        val start7 = shiftIsoDate(today, -6)
+        val targets = computeTargets(snap.config, snap.bodyRecords)
+
+        // 1) Workout summary (last 7 days)
+        val sessions7 = snap.sessions.values.filter { it.date in start7..today }
+        val muscleDone = mutableMapOf<String, Int>()
+        val musclePlanned = mutableMapOf<String, Int>()
+        sessions7.forEach { s ->
+            s.exercises.values.forEach { ex ->
+                val g = WorkoutDefaults.detectMuscleGroup(ex.name)
+                muscleDone[g] = (muscleDone[g] ?: 0) + ex.sets.count { it.repsDouble() > 0.0 }
+            }
+        }
+        snap.config.effectiveSplit().forEach { day ->
+            day.exercises.forEach { ex ->
+                val g = WorkoutDefaults.detectMuscleGroup(ex.name)
+                musclePlanned[g] = (musclePlanned[g] ?: 0) + ex.workingSets
+            }
+        }
+        val volumeText = WorkoutDefaults.MUSCLE_GROUPS.entries
+            .filter { (k, _) -> (musclePlanned[k] ?: 0) > 0 || (muscleDone[k] ?: 0) > 0 }
+            .joinToString("، ") { (k, meta) -> "${meta.arabicLabel}: ${muscleDone[k] ?: 0}/${musclePlanned[k] ?: 0} مجموعات" }
+
+        // 2) Nutrition summary (last 7 logged days)
+        val nutDays = snap.nutritionDays.values
+            .filter { it.date <= today && it.items.isNotEmpty() }
+            .sortedBy { it.date }
+            .takeLast(7)
+        val nutText = if (nutDays.isNotEmpty()) {
+            val avgKcal = (nutDays.sumOf { d -> d.items.sumOf { it.nutrientAmount("kcal") } } / nutDays.size).roundToInt()
+            val avgP = (nutDays.sumOf { d -> d.items.sumOf { it.nutrientAmount("p") } } / nutDays.size).roundToInt()
+            val avgC = (nutDays.sumOf { d -> d.items.sumOf { it.nutrientAmount("c") } } / nutDays.size).roundToInt()
+            val avgF = (nutDays.sumOf { d -> d.items.sumOf { it.nutrientAmount("f") } } / nutDays.size).roundToInt()
+            val avgWater = (nutDays.sumOf { it.waterMl } / nutDays.size)
+            val rda = if (snap.config.sex == "f") NutritionConstants.RDA_FEMALE else NutritionConstants.RDA_MALE
+            val count = NutritionConstants.NUTRIENT_COUNT
+            val sum = DoubleArray(count)
+            val has = BooleanArray(count)
+            nutDays.forEach { d ->
+                d.items.forEach { item ->
+                    item.nutrients.forEachIndexed { idx, v ->
+                        if (idx < count && v >= 0.0) {
+                            sum[idx] += v * item.grams / 100.0
+                            has[idx] = true
+                        }
+                    }
+                }
+            }
+            val lows = rda.entries.mapNotNull { (k, t) ->
+                val idx = NutritionConstants.NUTRIENT_INDEX[k] ?: return@mapNotNull null
+                if (!has[idx] || k in NutritionConstants.LIMIT_KEYS) null
+                else {
+                    val pct = (sum[idx] / nutDays.size) / t * 100.0
+                    if (pct < 70.0) "${NutritionConstants.NUTRIENT_LABELS[k] ?: k} (${pct.roundToInt()}%)" else null
+                }
+            }.take(5)
+            "آخر ${nutDays.size} أيام مسجلة: متوسط $avgKcal سعر (هدف ${targets?.kcal ?: "غير محدد"})، بروتين $avgP جم (هدف ${targets?.proteinG ?: "?"})، كارب $avgC جم، دهون $avgF جم، ماء $avgWater مل. " +
+                if (lows.isNotEmpty()) "أقل الميكروز: ${lows.joinToString("، ")}." else "الميكروز متوازنة."
+        } else {
+            "لم يتم تسجيل أيام تغذية بعد."
+        }
+
+        // 3) InBody & Body trend summary
+        val bodySorted = snap.bodyRecords.sortedBy { it.date }
+        val latest = bodySorted.lastOrNull()
+        val prev = if (bodySorted.size >= 2) bodySorted[bodySorted.size - 2] else null
+        val bodyText = if (latest != null) {
+            buildString {
+                append("آخر قياس (${latest.date}): ")
+                latest.weightKg?.let { append("وزن $it كجم، ") }
+                latest.smmKg?.let { append("عضل SMM $it كجم، ") }
+                latest.pbfPercent?.let { append("دهون $it%، ") }
+                latest.vfl?.let { append("دهون حشوية ${it.roundToInt()}، ") }
+                latest.score?.let { append("درجة InBody ${it.roundToInt()}/100. ") }
+                if (prev != null) {
+                    val dw = if (latest.weightKg != null && prev.weightKg != null) String.format("%+.1f", latest.weightKg - prev.weightKg) else null
+                    val dm = if (latest.smmKg != null && prev.smmKg != null) String.format("%+.1f", latest.smmKg - prev.smmKg) else null
+                    val df = if (latest.bfmKg != null && prev.bfmKg != null) String.format("%+.1f", latest.bfmKg - prev.bfmKg) else null
+                    append("التغيير عن قياس ${prev.date}: ")
+                    if (dw != null) append("وزن $dw كجم، ")
+                    if (dm != null) append("عضل $dm كجم، ")
+                    if (df != null) append("دهون $df كجم. ")
+                }
+                val ra = latest.segmentalLeanKg["ra"]
+                val la = latest.segmentalLeanKg["la"]
+                val rl = latest.segmentalLeanKg["rl"]
+                val ll = latest.segmentalLeanKg["ll"]
+                if (ra != null && la != null) append("ذراع يمين $ra vs يسار $la كجم. ")
+                if (rl != null && ll != null) append("رجل يمين $rl vs يسار $ll كجم.")
+            }
+        } else {
+            "لم يتم تسجيل قياسات جسم بعد."
+        }
+
+        val contextText = """
+            الهدف: ${snap.config.goal} | الأسبوع ${computeWeekNumber(snap.config.startDate)} من 12
+            التمرين (آخر 7 أيام - ${sessions7.size} جلسات): $volumeText
+            التغذية: $nutText
+            الجسم / InBody: $bodyText
+        """.trimIndent()
+
+        viewModelScope.launch {
+            _coachReport.value = AiCoachUiState(busyMessage = "المدرب الذكي بيحلل أرقام التمرين والتغذية والـ InBody...")
+            val res = geminiRepo.generateWeeklyCoachReport(contextText) { stage ->
+                _coachReport.update { it.copy(busyMessage = stage) }
+            }
+            res.fold(
+                onSuccess = { report ->
+                    _coachReport.value = AiCoachUiState(report = report)
+                },
+                onFailure = { e ->
+                    _coachReport.value = AiCoachUiState(errorMessage = e.message ?: "تعذّر إنشاء التقرير.")
+                }
+            )
         }
     }
 

@@ -665,7 +665,7 @@ data class CustomFood(
         val m = linkedMapOf<String, Any>(
             "userId" to uid,
             "name" to name.trim().take(200),
-            "source" to if (source in listOf("c", "l", "a", "e", "u", "s")) source else "c",
+            "source" to if (source in listOf("c", "l", "a", "e", "u", "s", "f")) source else "c",
             "barcode" to barcode.take(64),
             "refusePercent" to refusePercent.coerceIn(0.0, 100.0),
             "favorite" to favorite,
@@ -684,7 +684,7 @@ data class CustomFood(
     fun toUpdateMap(): Map<String, Any> {
         val m = linkedMapOf<String, Any>(
             "name" to name.trim().take(200),
-            "source" to if (source in listOf("c", "l", "a", "e", "u", "s")) source else "c",
+            "source" to if (source in listOf("c", "l", "a", "e", "u", "s", "f")) source else "c",
             "barcode" to barcode.take(64),
             "refusePercent" to refusePercent.coerceIn(0.0, 100.0),
             "favorite" to favorite,

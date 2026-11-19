@@ -67,10 +67,15 @@ import com.mutabei.workout.data.model.SetEntry
 import com.mutabei.workout.data.model.WorkoutDefaults
 import com.mutabei.workout.data.model.shiftIsoDate
 import com.mutabei.workout.data.model.todayIso
+import com.mutabei.workout.ui.components.DoubleProgressionBanner
 import com.mutabei.workout.ui.components.DualLineProgressChart
 import com.mutabei.workout.ui.components.ExpandableSectionCard
 import com.mutabei.workout.ui.components.MetricProgressBar
 import com.mutabei.workout.ui.components.MuscleSilhouetteCanvas
+import com.mutabei.workout.ui.components.PersonalRecordBadge
+import com.mutabei.workout.ui.components.PlateCalculatorDialog
+import com.mutabei.workout.ui.components.computeDoubleProgression
+import com.mutabei.workout.ui.components.isLivePersonalRecord
 import com.mutabei.workout.ui.theme.LocalSemanticColors
 import com.mutabei.workout.ui.viewmodel.AppDataSnapshot
 import com.mutabei.workout.ui.viewmodel.ExerciseHistoryPoint
@@ -93,6 +98,7 @@ fun WorkoutScreen(
     val today = todayIso()
     val sessionId = "${today}_$safeDayIdx"
     val todaySession = snapshot.sessions[sessionId]
+    var plateCalcTarget by remember { mutableStateOf<Pair<String, Double>?>(null) }
 
     fun openYoutube(videoId: String) {
         try {
@@ -100,6 +106,14 @@ fun WorkoutScreen(
         } catch (_: Exception) {
             viewModel.showToast("تعذّر فتح رابط يوتيوب.")
         }
+    }
+
+    if (plateCalcTarget != null) {
+        PlateCalculatorDialog(
+            exerciseName = plateCalcTarget!!.first,
+            initialWeightKg = plateCalcTarget!!.second,
+            onDismiss = { plateCalcTarget = null }
+        )
     }
 
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
@@ -215,6 +229,16 @@ fun WorkoutScreen(
                         )
                     },
                     onRepsDone = { viewModel.startRestTimer() },
+                    onPrefillWeights = { lastSets, suggestedW ->
+                        viewModel.prefillWeightsFromLastSession(
+                            dayIndex = safeDayIdx,
+                            exIndex = exIdx,
+                            setCount = spec.workingSets,
+                            lastSets = lastSets,
+                            suggestedWeightKg = suggestedW
+                        )
+                    },
+                    onOpenPlateCalc = { w -> plateCalcTarget = chosenName to w },
                     onSaveExercise = {
                         viewModel.saveExerciseLog(safeDayIdx, exIdx, chosenName, activeSets)
                     }
@@ -275,6 +299,8 @@ private fun ExerciseCard(
     onOpenYoutube: (String) -> Unit,
     onSetChanged: (Int, String?, String?) -> Unit,
     onRepsDone: () -> Unit,
+    onPrefillWeights: (List<SetEntry>, Double?) -> Unit,
+    onOpenPlateCalc: (Double) -> Unit,
     onSaveExercise: () -> Unit
 ) {
     val semantic = LocalSemanticColors.current
@@ -282,6 +308,8 @@ private fun ExerciseCard(
     val today = todayIso()
     val past = remember(history, today) { history.filter { it.date != today } }
     val lastSession = past.lastOrNull()
+    val isLivePr = remember(sets, past) { isLivePersonalRecord(sets, past) }
+    val progressionAdvice = remember(spec, lastSession) { computeDoubleProgression(spec, lastSession) }
     val muscleKey = WorkoutDefaults.detectMuscleGroup(chosenName)
     val muscleLabel = WorkoutDefaults.MUSCLE_GROUPS[muscleKey]?.arabicLabel ?: "عضلة"
 
@@ -326,6 +354,9 @@ private fun ExerciseCard(
                                 tint = semantic.ok,
                                 modifier = Modifier.size(18.dp)
                             )
+                        }
+                        if (isLivePr) {
+                            PersonalRecordBadge()
                         }
                     }
                     Text(
@@ -424,17 +455,48 @@ private fun ExerciseCard(
                 }
             }
 
-            // Last session summary
+            // Double Progression Coach banner
+            if (progressionAdvice != null) {
+                Spacer(Modifier.height(6.dp))
+                DoubleProgressionBanner(advice = progressionAdvice)
+            }
+
+            // Last session summary + 1-tap weight fill
             if (lastSession != null) {
                 Spacer(Modifier.height(6.dp))
                 val summary = lastSession.sets.joinToString(" ، ") { s ->
                     "${s.weight.ifBlank { "–" }}كجم×${s.reps.ifBlank { "–" }}"
                 }
-                Text(
-                    text = "آخر مرة (${lastSession.date}): $summary",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "آخر مرة (${lastSession.date}): $summary",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(99.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                        modifier = Modifier
+                            .clickable {
+                                val nextW = if (progressionAdvice?.readyToIncrease == true) progressionAdvice.suggestedWeightKg else null
+                                onPrefillWeights(lastSession.sets, nextW)
+                            }
+                            .testTag("prefill_weights_${dayIndex}_$exIndex")
+                    ) {
+                        Text(
+                            text = if (progressionAdvice?.readyToIncrease == true) "طبّق الوزن ↑" else "انسخ الأوزان",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
             }
 
             // Working sets rows
@@ -478,7 +540,7 @@ private fun ExerciseCard(
                         placeholder = { Text("عدات", textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number,
+                            keyboardType = KeyboardType.Decimal,
                             imeAction = ImeAction.Done
                         ),
                         keyboardActions = KeyboardActions(
@@ -536,6 +598,18 @@ private fun ExerciseCard(
                     modifier = Modifier.testTag("start_rest_${dayIndex}_$exIndex")
                 ) {
                     Text("⏱ راحة", style = MaterialTheme.typography.labelMedium)
+                }
+                OutlinedButton(
+                    onClick = {
+                        val baseW = sets.firstOrNull()?.weightDouble()?.takeIf { it > 0.0 }
+                            ?: lastSession?.topWeight()
+                            ?: 60.0
+                        onOpenPlateCalc(baseW)
+                    },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier.testTag("plate_calc_${dayIndex}_$exIndex")
+                ) {
+                    Text("⚖️ الطارات", style = MaterialTheme.typography.labelMedium)
                 }
             }
             if (!warmupMessage.isNullOrBlank()) {

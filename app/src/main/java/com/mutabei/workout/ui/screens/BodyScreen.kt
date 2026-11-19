@@ -50,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.mutabei.workout.data.model.BodyRecord
+import com.mutabei.workout.ui.components.BodySymmetryAndQualityCard
 import com.mutabei.workout.ui.components.CameraOrGalleryButtons
 import com.mutabei.workout.ui.components.DualLineProgressChart
 import com.mutabei.workout.ui.components.ExpandableSectionCard
@@ -437,6 +438,10 @@ fun BodyScreen(
             if (latestRecord != null) {
                 item(key = "latest_body_card") {
                     LatestBodyRecordCard(record = latestRecord)
+                }
+                item(key = "body_symmetry_quality") {
+                    val prevRecord = if (sortedRecords.size >= 2) sortedRecords[sortedRecords.size - 2] else null
+                    BodySymmetryAndQualityCard(latest = latestRecord, previous = prevRecord)
                 }
             }
 

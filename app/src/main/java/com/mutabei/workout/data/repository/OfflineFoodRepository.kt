@@ -134,11 +134,16 @@ class OfflineFoodRepository(private val appContext: Context) {
                     val f = entry.item
                     val strongHit = matchesStrong(entry.enLower) || (entry.arNorm.isNotEmpty() && matchesStrong(entry.arNorm))
                     val startHit = if (entry.arNorm.isNotEmpty()) startsWithAny(entry.arNorm) else startsWithAny(entry.enLower)
-                    val score = (if (f.source == "e") 0.5 else 1.0) +
+                    val srcBase = when (f.source) {
+                        "e" -> 0.5
+                        "f" -> 0.65
+                        "u" -> 1.0
+                        else -> 1.3
+                    }
+                    val score = srcBase +
                         (if (strongHit) 0.0 else 2.0) +
                         (if (startHit) 0.0 else 0.5) +
-                        (f.name.length / 200.0) +
-                        (if (f.source == "s") 0.3 else 0.0)
+                        (f.name.length / 200.0)
                     scored.add(score to f)
                 }
             }
@@ -178,7 +183,13 @@ class OfflineFoodRepository(private val appContext: Context) {
         return out.withIndex()
             .sortedWith(
                 compareByDescending<IndexedValue<FoodItem>> { overlap(it.value) }
-                    .thenBy { if (it.value.source == "e") 0 else 1 }
+                    .thenBy {
+                        when (it.value.source) {
+                            "e" -> 0
+                            "f" -> 1
+                            else -> 2
+                        }
+                    }
                     .thenBy { it.index }
             )
             .take(5)
@@ -201,7 +212,11 @@ class OfflineFoodRepository(private val appContext: Context) {
                 if (v <= 0.0 || kcal <= 0.0 || kcal > 420.0) continue
                 if (f.category in excludedAr || excludedEn.containsMatchIn(f.category)) continue
                 val pct = (v / rda) * 100.0
-                val weight = if (f.source == "e") 1.3 else 1.0
+                val weight = when (f.source) {
+                    "e" -> 1.3
+                    "f" -> 1.15
+                    else -> 1.0
+                }
                 candidates.add(Triple(f.name, pct, pct * weight))
             }
             candidates.sortedByDescending { it.third }
