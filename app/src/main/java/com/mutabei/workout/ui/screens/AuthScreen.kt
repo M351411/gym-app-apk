@@ -1,21 +1,31 @@
 package com.mutabei.workout.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.Login
 import androidx.compose.material3.Button
@@ -26,6 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,13 +53,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
+import com.google.firebase.auth.FirebaseUser
 import com.mutabei.workout.R
 import com.mutabei.workout.ui.util.attemptAutoSignIn
 import com.mutabei.workout.ui.util.onGoogleSignInClicked
 
 @Composable
 fun AuthScreen(
-    onAuthSuccess: () -> Unit
+    onAuthSuccess: (FirebaseUser) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -56,18 +68,26 @@ fun AuthScreen(
 
     var isLoading by remember { mutableStateOf(false) }
     var isCheckingAuto by remember { mutableStateOf(true) }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         attemptAutoSignIn(
             context = context,
             credentialManager = credentialManager,
-            onAuthSuccess = {
+            onAuthSuccess = { user ->
                 isCheckingAuto = false
-                onAuthSuccess()
+                statusMessage = null
+                onAuthSuccess(user)
             },
             onUnauthenticated = {
                 isCheckingAuto = false
+                statusMessage = null
+            },
+            onAutoSignInError = { msg ->
+                isCheckingAuto = false
+                statusMessage = null
+                errorMessage = msg
             },
             scope = scope
         )
@@ -80,6 +100,8 @@ fun AuthScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .safeDrawingPadding()
+                .verticalScroll(rememberScrollState())
                 .padding(24.dp),
             contentAlignment = Alignment.Center
         ) {
@@ -145,20 +167,29 @@ fun AuthScreen(
                         onClick = {
                             errorMessage = null
                             isLoading = true
+                            statusMessage = "جاري بدء تسجيل الدخول..."
                             onGoogleSignInClicked(
                                 context = context,
                                 credentialManager = credentialManager,
-                                onAuthSuccess = {
+                                onAuthSuccess = { user ->
                                     isLoading = false
-                                    onAuthSuccess()
+                                    statusMessage = null
+                                    errorMessage = null
+                                    onAuthSuccess(user)
                                 },
                                 onAuthError = { msg ->
                                     isLoading = false
+                                    statusMessage = null
                                     errorMessage = msg
                                 },
                                 scope = scope,
-                                onAuthCancelled = {
+                                onProgress = { progress ->
+                                    statusMessage = progress
+                                },
+                                onAuthCancelled = { msg ->
                                     isLoading = false
+                                    statusMessage = null
+                                    errorMessage = msg
                                 }
                             )
                         },
@@ -188,13 +219,71 @@ fun AuthScreen(
                         }
                     }
 
-                    if (!errorMessage.isNullOrBlank()) {
+                    if (!statusMessage.isNullOrBlank()) {
                         Text(
-                            text = errorMessage!!,
+                            text = statusMessage!!,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                            textAlign = TextAlign.Center
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.testTag("auth_status_text")
                         )
+                    }
+
+                    if (!errorMessage.isNullOrBlank()) {
+                        Surface(
+                            shape = MaterialTheme.shapes.medium,
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("auth_error_banner")
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.Top,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.ErrorOutline,
+                                        contentDescription = "خطأ في تسجيل الدخول",
+                                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Text(
+                                        text = errorMessage!!,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                                TextButton(
+                                    onClick = {
+                                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                        cm?.setPrimaryClip(ClipData.newPlainText("Auth Error", errorMessage))
+                                        Toast.makeText(context, "تم نسخ تفاصيل الخطأ", Toast.LENGTH_SHORT).show()
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.End)
+                                        .testTag("copy_auth_error_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.ContentCopy,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = "نسخ تفاصيل الخطأ",
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -204,7 +293,7 @@ fun AuthScreen(
 
 @Composable
 private fun FeatureBullet(text: String) {
-    androidx.compose.foundation.layout.Row(
+    Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {

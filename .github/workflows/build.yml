@@ -1,6 +1,18 @@
 name: Build APK
 on:
+  push:
+    branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: "Build variant (release recommended for real phones so Google Sign-In & Gemini work)"
+        required: false
+        default: "release"
+        type: choice
+        options:
+          - release
+          - debug
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -11,14 +23,36 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: gradle/actions/setup-gradle@v4
-      - name: Create google-services.json
-        run: echo '${{ secrets.GOOGLE_SERVICES_JSON }}' > app/google-services.json
-      - name: Create debug keystore
-        run: keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-      - name: Build debug APK
-        run: gradle wrapper && chmod +x gradlew && ./gradlew assembleDebug
+
+      - name: Prepare fixed signing keystore
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
+            echo "Decoding signing keystore from GitHub Secret (DEBUG_KEYSTORE_BASE64)..."
+            printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '\n\r ' | base64 -d > debug.keystore
+          elif [ -f debug.keystore.base64 ]; then
+            echo "Decoding fixed signing keystore from repository debug.keystore.base64..."
+            base64 -d debug.keystore.base64 > debug.keystore
+          elif [ -f debug.keystore ]; then
+            echo "Using existing debug.keystore in repository..."
+          else
+            echo "::error::Missing fixed signing keystore! Add DEBUG_KEYSTORE_BASE64 in GitHub Secrets or include debug.keystore.base64 from AI Studio so the APK SHA-1 matches Firebase Google Sign-In."
+            exit 1
+          fi
+          keytool -list -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android | grep -E 'SHA1:|SHA256:'
+
+      - name: Build APK
+        run: |
+          gradle wrapper && chmod +x gradlew
+          if [ "${{ inputs.build_type || 'release' }}" = "debug" ]; then
+            ./gradlew assembleDebug
+          else
+            ./gradlew assembleRelease
+          fi
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: app/build/outputs/apk/${{ inputs.build_type || 'release' }}/*.apk

@@ -68,7 +68,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -108,20 +111,32 @@ class MainActivity : ComponentActivity() {
         setContent {
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
                 var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
-                DisposableEffect(Unit) {
-                    val listener = FirebaseAuth.AuthStateListener { auth ->
+                val lifecycleOwner = LocalLifecycleOwner.current
+
+                DisposableEffect(lifecycleOwner) {
+                    val authListener = FirebaseAuth.AuthStateListener { auth ->
                         currentUser = auth.currentUser
                     }
-                    Firebase.auth.addAuthStateListener(listener)
-                    onDispose { Firebase.auth.removeAuthStateListener(listener) }
+                    val lifecycleObserver = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_RESUME) {
+                            currentUser = Firebase.auth.currentUser
+                        }
+                    }
+                    Firebase.auth.addAuthStateListener(authListener)
+                    lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
+                    currentUser = Firebase.auth.currentUser
+                    onDispose {
+                        Firebase.auth.removeAuthStateListener(authListener)
+                        lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
+                    }
                 }
 
                 val activeUser = currentUser
                 if (activeUser == null) {
                     MutabeiTheme {
                         AuthScreen(
-                            onAuthSuccess = {
-                                currentUser = Firebase.auth.currentUser
+                            onAuthSuccess = { verifiedUser ->
+                                currentUser = Firebase.auth.currentUser ?: verifiedUser
                             }
                         )
                     }
