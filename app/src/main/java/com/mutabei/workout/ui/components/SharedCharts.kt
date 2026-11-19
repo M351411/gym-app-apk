@@ -288,7 +288,7 @@ fun ExpandableSectionCard(
 @Composable
 fun CameraOrGalleryButtons(
     cameraLabel: String,
-    galleryLabel: String = "اختار صورة من المعرض",
+    galleryLabel: String = "من المعرض",
     enabled: Boolean = true,
     cameraTestTag: String,
     galleryTestTag: String,
@@ -303,6 +303,7 @@ fun CameraOrGalleryButtons(
         Button(
             onClick = onCameraClick,
             enabled = enabled,
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 10.dp),
             modifier = Modifier
                 .weight(1f)
                 .testTag(cameraTestTag)
@@ -313,11 +314,16 @@ fun CameraOrGalleryButtons(
                 modifier = Modifier.size(18.dp)
             )
             Spacer(Modifier.width(6.dp))
-            Text(cameraLabel, maxLines = 1)
+            Text(
+                text = cameraLabel,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
         }
         OutlinedButton(
             onClick = onGalleryClick,
             enabled = enabled,
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 10.dp),
             modifier = Modifier
                 .weight(1f)
                 .testTag(galleryTestTag)
@@ -328,7 +334,11 @@ fun CameraOrGalleryButtons(
                 modifier = Modifier.size(18.dp)
             )
             Spacer(Modifier.width(6.dp))
-            Text(galleryLabel, maxLines = 1)
+            Text(
+                text = galleryLabel,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
         }
     }
 }

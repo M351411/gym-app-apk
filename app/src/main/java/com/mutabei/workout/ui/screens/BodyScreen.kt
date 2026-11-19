@@ -206,8 +206,8 @@ fun BodyScreen(
                         )
 
                         CameraOrGalleryButtons(
-                            cameraLabel = "صوّر ورقة InBody",
-                            galleryLabel = "صورة من المعرض",
+                            cameraLabel = "صوّر الورقة",
+                            galleryLabel = "من المعرض",
                             enabled = !bodyDraft.aiBusy,
                             cameraTestTag = "inbody_camera_button",
                             galleryTestTag = "inbody_gallery_button",
@@ -219,15 +219,19 @@ fun BodyScreen(
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
                         if (!bodyDraft.aiStatusMessage.isNullOrBlank()) {
+                            val isSuccess = bodyDraft.aiStatusMessage.contains("✅")
+                            val isError = !bodyDraft.aiBusy && !isSuccess
                             Surface(
                                 shape = MaterialTheme.shapes.small,
-                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                                color = if (isError) MaterialTheme.colorScheme.errorContainer
+                                else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
                                     text = bodyDraft.aiStatusMessage,
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    color = if (isError) MaterialTheme.colorScheme.onErrorContainer
+                                    else MaterialTheme.colorScheme.onPrimaryContainer,
                                     modifier = Modifier.padding(10.dp)
                                 )
                             }

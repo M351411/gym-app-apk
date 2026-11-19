@@ -13,7 +13,9 @@ import com.mutabei.workout.data.model.BodyRecord
 import com.mutabei.workout.data.model.NutritionConstants
 import com.mutabei.workout.data.model.todayIso
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 
@@ -25,64 +27,62 @@ class GeminiAiRepository {
 
     private fun segmentalSchema(): Schema = Schema.obj(
         properties = mapOf(
-            "left_arm" to Schema.double(nullable = true),
-            "right_arm" to Schema.double(nullable = true),
-            "trunk" to Schema.double(nullable = true),
-            "left_leg" to Schema.double(nullable = true),
-            "right_leg" to Schema.double(nullable = true)
+            "la" to Schema.double(description = "Left arm"),
+            "ra" to Schema.double(description = "Right arm"),
+            "tr" to Schema.double(description = "Trunk"),
+            "ll" to Schema.double(description = "Left leg"),
+            "rl" to Schema.double(description = "Right leg")
         ),
-        optionalProperties = listOf("left_arm", "right_arm", "trunk", "left_leg", "right_leg")
-    )
-
-    private fun rangePairSchema(): Schema = Schema.array(
-        items = Schema.double(),
-        description = "Two-element array [low, high] for normal range",
-        nullable = true
+        optionalProperties = listOf("la", "ra", "tr", "ll", "rl")
     )
 
     private val inBodyModel by lazy {
-        val rangeKeys = listOf("w", "bfm", "ffm", "tbw", "pro", "min", "bmr", "whr", "vfl")
+        val rangeItemSchema = Schema.obj(
+            properties = mapOf(
+                "k" to Schema.string(description = "Metric key: w, bfm, ffm, tbw, pro, min, bmr, whr, or vfl"),
+                "lo" to Schema.double(description = "Lower bound of printed normal range"),
+                "hi" to Schema.double(description = "Upper bound of printed normal range")
+            )
+        )
         val inBodySchema = Schema.obj(
             properties = mapOf(
-                "test_date" to Schema.string(description = "YYYY-MM-DD test date printed on sheet", nullable = true),
-                "height_cm" to Schema.double(nullable = true),
-                "weight_kg" to Schema.double(nullable = true),
-                "total_body_water_l" to Schema.double(nullable = true),
-                "protein_kg" to Schema.double(nullable = true),
-                "minerals_kg" to Schema.double(nullable = true),
-                "body_fat_mass_kg" to Schema.double(nullable = true),
-                "fat_free_mass_kg" to Schema.double(nullable = true),
-                "skeletal_muscle_mass_kg" to Schema.double(nullable = true),
-                "body_fat_percent" to Schema.double(nullable = true),
-                "bmi" to Schema.double(nullable = true),
-                "bmr_kcal" to Schema.double(nullable = true),
-                "waist_hip_ratio" to Schema.double(nullable = true),
-                "visceral_fat_level" to Schema.double(nullable = true),
-                "obesity_degree_percent" to Schema.double(nullable = true),
-                "inbody_score" to Schema.double(nullable = true),
-                "target_weight_kg" to Schema.double(nullable = true),
-                "fat_control_kg" to Schema.double(nullable = true),
-                "muscle_control_kg" to Schema.double(nullable = true),
-                "segmental_lean_kg" to segmentalSchema(),
-                "segmental_lean_percent" to segmentalSchema(),
-                "segmental_fat_kg" to segmentalSchema(),
-                "ranges" to Schema.obj(
-                    properties = rangeKeys.associateWith { rangePairSchema() },
-                    optionalProperties = rangeKeys
+                "date" to Schema.string(description = "YYYY-MM-DD test date printed on sheet"),
+                "h" to Schema.double(description = "Height in cm"),
+                "w" to Schema.double(description = "Weight in kg"),
+                "tbw" to Schema.double(description = "Total body water in L"),
+                "pro" to Schema.double(description = "Protein in kg"),
+                "min" to Schema.double(description = "Minerals in kg"),
+                "bfm" to Schema.double(description = "Body fat mass in kg"),
+                "ffm" to Schema.double(description = "Fat free mass in kg"),
+                "smm" to Schema.double(description = "Skeletal muscle mass in kg"),
+                "pbf" to Schema.double(description = "Percent body fat %"),
+                "bmi" to Schema.double(description = "BMI"),
+                "bmr" to Schema.double(description = "Basal metabolic rate in kcal"),
+                "whr" to Schema.double(description = "Waist-hip ratio"),
+                "vfl" to Schema.double(description = "Visceral fat level"),
+                "obd" to Schema.double(description = "Obesity degree %"),
+                "score" to Schema.double(description = "InBody score out of 100"),
+                "tgt" to Schema.double(description = "Target weight in kg"),
+                "fc" to Schema.double(description = "Fat control in kg"),
+                "mc" to Schema.double(description = "Muscle control in kg"),
+                "sl_kg" to segmentalSchema(),
+                "sl_pct" to segmentalSchema(),
+                "sf_kg" to segmentalSchema(),
+                "ranges" to Schema.array(
+                    items = rangeItemSchema,
+                    description = "Normal ranges printed in brackets next to values"
                 )
             ),
             optionalProperties = listOf(
-                "test_date", "height_cm", "weight_kg", "total_body_water_l", "protein_kg",
-                "minerals_kg", "body_fat_mass_kg", "fat_free_mass_kg", "skeletal_muscle_mass_kg",
-                "body_fat_percent", "bmi", "bmr_kcal", "waist_hip_ratio", "visceral_fat_level",
-                "obesity_degree_percent", "inbody_score", "target_weight_kg", "fat_control_kg",
-                "muscle_control_kg", "segmental_lean_kg", "segmental_lean_percent",
-                "segmental_fat_kg", "ranges"
+                "date", "h", "w", "tbw", "pro", "min", "bfm", "ffm", "smm", "pbf",
+                "bmi", "bmr", "whr", "vfl", "obd", "score", "tgt", "fc", "mc",
+                "sl_kg", "sl_pct", "sf_kg", "ranges"
             )
         )
         Firebase.ai.generativeModel(
             modelName = MODEL_NAME,
             generationConfig = generationConfig {
+                temperature = 0.1f
                 responseMimeType = "application/json"
                 responseSchema = inBodySchema
             }
@@ -90,24 +90,30 @@ class GeminiAiRepository {
     }
 
     private val nutritionLabelModel by lazy {
-        val per100Schema = Schema.obj(
-            properties = NutritionConstants.NUTRIENT_KEYS.associateWith { Schema.double(nullable = true) },
-            optionalProperties = NutritionConstants.NUTRIENT_KEYS
+        val nutrientEntrySchema = Schema.obj(
+            properties = mapOf(
+                "k" to Schema.string(description = "Nutrient key from: kcal, p, f, c, fib, sug, sat, mono, poly, o3, chol, na, k, ca, fe, mg, ph, zn, cu, mn, se, vA, vC, vD, vE, vK, b1, b2, b3, b5, b6, fol, b12"),
+                "v" to Schema.double(description = "Numeric value in required unit")
+            )
         )
         val labelSchema = Schema.obj(
             properties = mapOf(
-                "name" to Schema.string(description = "Product or supplement name in Arabic or original language", nullable = true),
-                "barcode" to Schema.string(description = "Barcode digits if visible", nullable = true),
-                "serving_g" to Schema.double(description = "Serving size in grams if food/powder; use 100 for per-tablet/capsule supplements", nullable = true),
-                "is_supplement" to Schema.boolean(description = "True if this product is a vitamin, mineral, multivitamin, omega-3, or tablet/capsule supplement", nullable = true),
-                "serving_unit" to Schema.string(description = "Arabic unit label for one serving if supplement: e.g. قرص, كبسولة, سكوب, كيس", nullable = true),
-                "per100" to per100Schema
+                "name" to Schema.string(description = "Product or supplement name"),
+                "barcode" to Schema.string(description = "Barcode digits if visible"),
+                "serving_g" to Schema.double(description = "Serving size in grams; use 100 for per-tablet/capsule supplements"),
+                "is_supplement" to Schema.boolean(description = "True if vitamin, mineral, multivitamin, omega-3, or tablet/capsule supplement"),
+                "serving_unit" to Schema.string(description = "Arabic unit for one serving if supplement: قرص, كبسولة, سكوب, كيس"),
+                "nutrients" to Schema.array(
+                    items = nutrientEntrySchema,
+                    description = "List of printed nutrients only"
+                )
             ),
-            optionalProperties = listOf("name", "barcode", "serving_g", "is_supplement", "serving_unit", "per100")
+            optionalProperties = listOf("name", "barcode", "serving_g", "is_supplement", "serving_unit", "nutrients")
         )
         Firebase.ai.generativeModel(
             modelName = MODEL_NAME,
             generationConfig = generationConfig {
+                temperature = 0.1f
                 responseMimeType = "application/json"
                 responseSchema = labelSchema
             }
@@ -117,11 +123,11 @@ class GeminiAiRepository {
     private val mealFoodsModel by lazy {
         val fallbackSchema = Schema.obj(
             properties = mapOf(
-                "kcal" to Schema.double(nullable = true),
-                "p" to Schema.double(nullable = true),
-                "f" to Schema.double(nullable = true),
-                "c" to Schema.double(nullable = true),
-                "fib" to Schema.double(nullable = true)
+                "kcal" to Schema.double(),
+                "p" to Schema.double(),
+                "f" to Schema.double(),
+                "c" to Schema.double(),
+                "fib" to Schema.double()
             ),
             optionalProperties = listOf("kcal", "p", "f", "c", "fib")
         )
@@ -142,6 +148,7 @@ class GeminiAiRepository {
         Firebase.ai.generativeModel(
             modelName = MODEL_NAME,
             generationConfig = generationConfig {
+                temperature = 0.2f
                 responseMimeType = "application/json"
                 responseSchema = foodsSchema
             }
@@ -151,13 +158,14 @@ class GeminiAiRepository {
     private val barcodeModel by lazy {
         val barcodeSchema = Schema.obj(
             properties = mapOf(
-                "digits" to Schema.string(description = "Exact numeric barcode digits under the bars", nullable = true)
+                "digits" to Schema.string(description = "Exact numeric barcode digits under the bars")
             ),
             optionalProperties = listOf("digits")
         )
         Firebase.ai.generativeModel(
             modelName = MODEL_NAME,
             generationConfig = generationConfig {
+                temperature = 0.0f
                 responseMimeType = "application/json"
                 responseSchema = barcodeSchema
             }
@@ -167,11 +175,11 @@ class GeminiAiRepository {
     suspend fun parseInBodySheet(bitmap: Bitmap): Result<BodyRecord> = runAiCall {
         val prompt = """
             Read this InBody body composition result sheet carefully.
-            Extract all printed numeric measurements accurately (use null if not printed; never guess).
-            Ranges should contain [low, high] normal ranges printed in brackets next to each value.
-            Left and Right labels on the body diagram refer to the person's left and right sides as printed.
-            Ignore all personal identifiers (name, ID number, phone numbers, addresses); do not output them.
-            Format test_date as YYYY-MM-DD if visible.
+            Extract all printed numeric measurements accurately and OMIT any field not printed (never guess).
+            Segmental maps: sl_kg = Segmental Lean (kg), sl_pct = Segmental Lean (%), sf_kg = Segmental Fat (kg), using keys la (left arm), ra (right arm), tr (trunk), ll (left leg), rl (right leg).
+            For ranges, include printed [low, high] normal range brackets with k in [w, bfm, ffm, tbw, pro, min, bmr, whr, vfl].
+            Ignore personal identifiers (name, ID, phone, address).
+            Format date as YYYY-MM-DD if printed.
         """.trimIndent()
 
         val response = withTimeout(TIMEOUT_MS) {
@@ -188,36 +196,33 @@ class GeminiAiRepository {
         fun optD(k: String): Double? =
             if (json.has(k) && !json.isNull(k)) json.optDouble(k, Double.NaN).takeIf { !it.isNaN() } else null
 
-        val segMap = mapOf(
-            "la" to "left_arm", "ra" to "right_arm", "tr" to "trunk",
-            "ll" to "left_leg", "rl" to "right_leg"
-        )
+        val segKeys = listOf("la", "ra", "tr", "ll", "rl")
         fun readSeg(objKey: String): Map<String, Double> {
             val obj = json.optJSONObject(objKey) ?: return emptyMap()
-            return segMap.entries.mapNotNull { (shortKey, longKey) ->
-                if (obj.has(longKey) && !obj.isNull(longKey)) {
-                    obj.optDouble(longKey, Double.NaN).takeIf { !it.isNaN() }?.let { shortKey to it }
+            return segKeys.mapNotNull { k ->
+                if (obj.has(k) && !obj.isNull(k)) {
+                    obj.optDouble(k, Double.NaN).takeIf { !it.isNaN() }?.let { k to it }
                 } else null
             }.toMap()
         }
 
-        val rangesObj = json.optJSONObject("ranges")
         val ranges = mutableMapOf<String, List<Double>>()
-        if (rangesObj != null) {
-            val keys = rangesObj.keys()
-            while (keys.hasNext()) {
-                val rk = keys.next()
-                val arr = rangesObj.optJSONArray(rk)
-                if (arr != null && arr.length() >= 2) {
-                    val lo = arr.optDouble(0, Double.NaN)
-                    val hi = arr.optDouble(1, Double.NaN)
-                    if (!lo.isNaN() && !hi.isNaN()) ranges[rk] = listOf(lo, hi)
+        val rangesArr = json.optJSONArray("ranges")
+        if (rangesArr != null) {
+            for (i in 0 until rangesArr.length()) {
+                val item = rangesArr.optJSONObject(i) ?: continue
+                val rk = item.optString("k", "").trim()
+                val lo = item.optDouble("lo", Double.NaN)
+                val hi = item.optDouble("hi", Double.NaN)
+                if (rk.isNotBlank() && !lo.isNaN() && !hi.isNaN()) {
+                    ranges[rk] = listOf(lo, hi)
                 }
             }
         }
 
-        val rawDate = json.optString("test_date", "")
+        val rawDate = json.optString("date", "")
             .replace('.', '-')
+            .replace('/', '-')
             .replace(Regex("\\s.*$"), "")
             .removeSuffix("-")
         val parsedDate = if (Regex("^\\d{4}-\\d{1,2}-\\d{1,2}$").matches(rawDate)) {
@@ -229,27 +234,27 @@ class GeminiAiRepository {
 
         BodyRecord(
             date = parsedDate,
-            weightKg = optD("weight_kg"),
-            smmKg = optD("skeletal_muscle_mass_kg"),
-            pbfPercent = optD("body_fat_percent"),
-            bfmKg = optD("body_fat_mass_kg"),
-            ffmKg = optD("fat_free_mass_kg"),
-            tbwL = optD("total_body_water_l"),
-            proteinKg = optD("protein_kg"),
-            mineralsKg = optD("minerals_kg"),
-            bmrKcal = optD("bmr_kcal"),
-            vfl = optD("visceral_fat_level"),
-            whr = optD("waist_hip_ratio"),
-            score = optD("inbody_score"),
-            targetWeightKg = optD("target_weight_kg"),
-            fatControlKg = optD("fat_control_kg"),
-            muscleControlKg = optD("muscle_control_kg"),
+            weightKg = optD("w"),
+            smmKg = optD("smm"),
+            pbfPercent = optD("pbf"),
+            bfmKg = optD("bfm"),
+            ffmKg = optD("ffm"),
+            tbwL = optD("tbw"),
+            proteinKg = optD("pro"),
+            mineralsKg = optD("min"),
+            bmrKcal = optD("bmr"),
+            vfl = optD("vfl"),
+            whr = optD("whr"),
+            score = optD("score"),
+            targetWeightKg = optD("tgt"),
+            fatControlKg = optD("fc"),
+            muscleControlKg = optD("mc"),
             bmi = optD("bmi"),
-            obesityDegree = optD("obesity_degree_percent"),
-            heightCm = optD("height_cm"),
-            segmentalLeanKg = readSeg("segmental_lean_kg"),
-            segmentalLeanPercent = readSeg("segmental_lean_percent"),
-            segmentalFatKg = readSeg("segmental_fat_kg"),
+            obesityDegree = optD("obd"),
+            heightCm = optD("h"),
+            segmentalLeanKg = readSeg("sl_kg"),
+            segmentalLeanPercent = readSeg("sl_pct"),
+            segmentalFatKg = readSeg("sf_kg"),
             ranges = ranges
         )
     }
@@ -257,14 +262,14 @@ class GeminiAiRepository {
     suspend fun parseNutritionLabel(bitmap: Bitmap): Result<AiLabelResult> = runAiCall {
         val prompt = """
             Read this Nutrition Facts or Supplement Facts label accurately.
-            - If this is a FOOD or POWDER with weights in grams: all per100 values MUST be per 100 g (or 100 ml). If the label only lists per-serving values, convert them to per 100 g using serving_g, and set is_supplement=false.
-            - If this is a DIETARY SUPPLEMENT (multivitamin, vitamin, mineral, omega-3, tablet, capsule, softgel): set is_supplement=true, serving_g=100, serving_unit to the Arabic unit ("قرص" for tablet, "كبسولة" for capsule/softgel, "سكوب" for scoop), and put the exact nutrient amounts FOR 1 TABLET/CAPSULE (or 1 serving if listed as 1 unit) directly into per100 (and kcal=0 if calories are not printed).
-            - Convert IU units accurately when present: Vitamin D (1000 IU = 25 mcg), Vitamin A (1 IU = 0.3 mcg RAE), Vitamin E (1 IU = 0.67 mg d-alpha or 1.0 mg synthetic if unspecified).
-            - For Omega-3 / Fish Oil: sum EPA + DHA (or total Omega-3 fatty acids) and output in GRAMS in key "o3" (e.g., 700 mg -> 0.7).
-            Units required: kcal; GRAMS for p, f, c, fib, sug, sat, mono, poly, o3;
-            MILLIGRAMS (mg) for chol, na, k, ca, fe, mg, ph, zn, cu, mn, vC, b1, b2, b3, b6, b5, vE;
-            MICROGRAMS (mcg) for se, vA, fol, b12, vD, vK.
-            Use null for any nutrient not printed on the label. Never guess unprinted values.
+            - If FOOD or POWDER with weights in grams: put values per 100g (or 100ml) in nutrients array; convert per-serving values to per 100g using serving_g; set is_supplement=false.
+            - If DIETARY SUPPLEMENT (multivitamin, vitamin, mineral, omega-3, tablet, capsule, softgel): set is_supplement=true, serving_g=100, serving_unit in Arabic ("قرص", "كبسولة", or "سكوب"), and put exact amounts FOR 1 TABLET/CAPSULE directly in nutrients.
+            - Convert IU: Vitamin D (1000 IU = 25 mcg), Vitamin A (1 IU = 0.3 mcg), Vitamin E (1 IU = 0.67-1 mg).
+            - For Omega-3 / Fish Oil: total Omega-3 (EPA+DHA) in GRAMS under key "o3" (e.g., 700 mg -> 0.7).
+            Required units: kcal; GRAMS for p, f, c, fib, sug, sat, mono, poly, o3;
+            MG for chol, na, k, ca, fe, mg, ph, zn, cu, mn, vC, b1, b2, b3, b6, b5, vE;
+            MCG for se, vA, fol, b12, vD, vK.
+            Only include nutrients printed on the label; never guess unprinted values.
         """.trimIndent()
 
         val response = withTimeout(TIMEOUT_MS) {
@@ -281,14 +286,13 @@ class GeminiAiRepository {
     suspend fun lookupSupplementByName(supplementQuery: String): Result<AiLabelResult> = runAiCall {
         val prompt = """
             The user wants to log this dietary supplement / multivitamin / pharmacy product (Egyptian and international pharmacy brands are common): "$supplementQuery".
-            Return its standard official active composition PER 1 TABLET / CAPSULE (or per 1 scoop if powder) directly inside "per100".
-            Set is_supplement=true, serving_g=100 (for tablets/capsules) or actual scoop grams (for powders like whey), and serving_unit in Arabic ("قرص", "كبسولة", or "سكوب").
-            Set kcal=0 if negligible/not applicable.
-            Units required: kcal; GRAMS for p, f, c, fib, sug, sat, mono, poly, o3 (total Omega-3 in grams, e.g. 700 mg = 0.7);
-            MILLIGRAMS (mg) for chol, na, k, ca, fe, mg, ph, zn, cu, mn, vC, b1, b2, b3, b6, b5, vE;
-            MICROGRAMS (mcg) for se, vA, fol, b12, vD, vK.
-            Convert IU to mcg/mg (Vitamin D: 1000 IU = 25 mcg; Vitamin A: 1 IU = 0.3 mcg; Vitamin E: 1 IU ≈ 0.67-1 mg).
-            Only include nutrients genuinely present in this product; leave absent nutrients as null.
+            Return its standard official active composition PER 1 TABLET / CAPSULE (or per 1 scoop if powder) inside "nutrients" array as {k, v} entries.
+            Set is_supplement=true, serving_g=100 (for tablets/capsules) or actual scoop grams (for powders), and serving_unit in Arabic ("قرص", "كبسولة", or "سكوب").
+            Required units: kcal; GRAMS for p, f, c, fib, sug, sat, mono, poly, o3 (total Omega-3 in grams, e.g. 700 mg = 0.7);
+            MG for chol, na, k, ca, fe, mg, ph, zn, cu, mn, vC, b1, b2, b3, b6, b5, vE;
+            MCG for se, vA, fol, b12, vD, vK.
+            Convert IU to mcg/mg (Vitamin D: 1000 IU = 25 mcg; Vitamin A: 1 IU = 0.3 mcg; Vitamin E: 1 IU = 0.67-1 mg).
+            Only include nutrients genuinely present in this product.
         """.trimIndent()
 
         val response = withTimeout(TIMEOUT_MS) {
@@ -299,12 +303,19 @@ class GeminiAiRepository {
 
     private fun parseLabelJson(rawText: String): AiLabelResult {
         val json = JSONObject(rawText)
-        val per100Obj = json.optJSONObject("per100") ?: JSONObject()
-        val nutMap = NutritionConstants.NUTRIENT_KEYS.associateWith { k ->
-            if (per100Obj.has(k) && !per100Obj.isNull(k)) {
-                per100Obj.optDouble(k, Double.NaN).takeIf { !it.isNaN() }
-            } else null
+        val rawMap = mutableMapOf<String, Double>()
+        val nutArr = json.optJSONArray("nutrients")
+        if (nutArr != null) {
+            for (i in 0 until nutArr.length()) {
+                val entry = nutArr.optJSONObject(i) ?: continue
+                val k = entry.optString("k", "").trim()
+                val v = entry.optDouble("v", Double.NaN)
+                if (k.isNotBlank() && !v.isNaN()) {
+                    rawMap[k] = v
+                }
+            }
         }
+        val nutMap = NutritionConstants.NUTRIENT_KEYS.associateWith { k -> rawMap[k] }
         val isSupp = json.optBoolean("is_supplement", false)
         val unit = if (json.isNull("serving_unit")) "" else json.optString("serving_unit", "").trim()
         val sg = if (json.has("serving_g") && !json.isNull("serving_g")) {
@@ -355,7 +366,7 @@ class GeminiAiRepository {
     }
 
     suspend fun readBarcodeFromImage(bitmap: Bitmap): Result<String?> = runAiCall {
-        val prompt = "Read the exact numeric barcode digits printed under the barcode bars in this image. Do not guess if unreadable; return null."
+        val prompt = "Read the exact numeric barcode digits printed under the barcode bars in this image. Do not guess if unreadable; omit digits."
         val response = withTimeout(TIMEOUT_MS) {
             barcodeModel.generateContent(
                 content {
@@ -398,15 +409,44 @@ class GeminiAiRepository {
         return result
     }
 
-    private suspend inline fun <T> runAiCall(block: () -> T): Result<T> = try {
-        Result.success(block())
+    private fun formatAiError(error: Throwable): String {
+        val chain = generateSequence(error) { it.cause }
+            .map { t ->
+                val cls = t.javaClass.simpleName.ifBlank { "Error" }
+                val msg = t.message?.trim().orEmpty()
+                if (msg.isNotBlank()) "$cls: $msg" else cls
+            }
+            .distinct()
+            .toList()
+        val combined = chain.joinToString(" ← ")
+        val lower = combined.lowercase()
+        val friendlyPrefix = when {
+            lower.contains("403") || lower.contains("appcheck") || lower.contains("app check") || lower.contains("recaptcha") || lower.contains("attestation") ->
+                "تعذّر التحقق الأمني (App Check / reCAPTCHA) أثناء الاتصال بـ Gemini."
+
+            lower.contains("429") || lower.contains("quota") || lower.contains("resource_exhausted") ->
+                "تم تجاوز حد الطلبات المؤقت لـ Gemini. انتظر قليلًا ثم جرّب مرة أخرى."
+
+            lower.contains("unknownhost") || lower.contains("connect") || lower.contains("network") || lower.contains("socket") ->
+                "مشكلة في اتصال الإنترنت أثناء إرسال الصورة لـ Gemini."
+
+            else ->
+                "تعذّر التحليل بواسطة Gemini."
+        }
+        return "$friendlyPrefix\n($combined)"
+    }
+
+    private suspend inline fun <T> runAiCall(crossinline block: suspend () -> T): Result<T> = try {
+        withContext(Dispatchers.IO) {
+            Result.success(block())
+        }
     } catch (e: TimeoutCancellationException) {
         Log.e(TAG, "Gemini AI call timed out after ${TIMEOUT_MS}ms", e)
-        Result.failure(Exception("انتهى وقت الاتصال بـ Gemini بعد 60 ثانية. جرّب مرة تانية."))
+        Result.failure(Exception("انتهى وقت الاتصال بـ Gemini بعد 60 ثانية. تأكد من استقرار الإنترنت وجرّب صورة أوضح."))
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
         Log.e(TAG, "Gemini AI call failed", e)
-        Result.failure(Exception(e.localizedMessage ?: "حصلت مشكلة أثناء التحليل بـ Gemini. جرّب صورة أوضح."))
+        Result.failure(Exception(formatAiError(e)))
     }
 }
