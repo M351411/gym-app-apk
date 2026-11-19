@@ -3,10 +3,16 @@ package com.mutabei.workout.data.repository
 import android.graphics.Bitmap
 import android.util.Log
 import com.google.firebase.Firebase
+import com.google.firebase.ai.GenerativeModel
 import com.google.firebase.ai.ai
+import com.google.firebase.ai.type.Content
 import com.google.firebase.ai.type.Schema
+import com.google.firebase.ai.type.ThinkingLevel
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
+import com.google.firebase.ai.type.thinkingConfig
+import com.google.firebase.appcheck.FirebaseAppCheck
+import com.mutabei.workout.appCheckInitSummary
 import com.mutabei.workout.data.model.AiDetectedFoodRaw
 import com.mutabei.workout.data.model.AiLabelResult
 import com.mutabei.workout.data.model.BodyRecord
@@ -15,13 +21,39 @@ import com.mutabei.workout.data.model.todayIso
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 
 private const val TAG = "GeminiAiRepo"
-private const val MODEL_NAME = "gemini-3.8-flash"
-private const val TIMEOUT_MS = 60_000L
+private const val PRIMARY_MODEL_NAME = "gemini-3.8-flash"
+private const val FALLBACK_MODEL_NAME = "gemini-3.5-flash-lite"
+
+private const val APP_CHECK_TIMEOUT_MS = 20_000L
+private const val PRIMARY_TIMEOUT_MS = 35_000L
+private const val FALLBACK_TIMEOUT_MS = 25_000L
+
+private class AppCheckStageException(
+    val timedOut: Boolean,
+    val elapsedMs: Long,
+    cause: Throwable? = null
+) : Exception(
+    if (timedOut) "App Check timed out after ${elapsedMs}ms" else (cause?.message ?: "App Check failed"),
+    cause
+)
+
+private class GeminiStreamStageException(
+    val primaryModel: String,
+    val primarySummary: String,
+    val fallbackModel: String?,
+    val fallbackSummary: String?,
+    val appCheckMs: Long,
+    val imageKb: Int?,
+    val anyTimedOut: Boolean,
+    cause: Throwable?
+) : Exception(primarySummary, cause)
 
 class GeminiAiRepository {
 
@@ -36,7 +68,7 @@ class GeminiAiRepository {
         optionalProperties = listOf("la", "ra", "tr", "ll", "rl")
     )
 
-    private val inBodyModel by lazy {
+    private val inBodySchema: Schema by lazy {
         val rangeItemSchema = Schema.obj(
             properties = mapOf(
                 "k" to Schema.string(description = "Metric key: w, bfm, ffm, tbw, pro, min, bmr, whr, or vfl"),
@@ -44,7 +76,7 @@ class GeminiAiRepository {
                 "hi" to Schema.double(description = "Upper bound of printed normal range")
             )
         )
-        val inBodySchema = Schema.obj(
+        Schema.obj(
             properties = mapOf(
                 "date" to Schema.string(description = "YYYY-MM-DD test date printed on sheet"),
                 "h" to Schema.double(description = "Height in cm"),
@@ -79,24 +111,16 @@ class GeminiAiRepository {
                 "sl_kg", "sl_pct", "sf_kg", "ranges"
             )
         )
-        Firebase.ai.generativeModel(
-            modelName = MODEL_NAME,
-            generationConfig = generationConfig {
-                temperature = 0.1f
-                responseMimeType = "application/json"
-                responseSchema = inBodySchema
-            }
-        )
     }
 
-    private val nutritionLabelModel by lazy {
+    private val labelSchema: Schema by lazy {
         val nutrientEntrySchema = Schema.obj(
             properties = mapOf(
                 "k" to Schema.string(description = "Nutrient key from: kcal, p, f, c, fib, sug, sat, mono, poly, o3, chol, na, k, ca, fe, mg, ph, zn, cu, mn, se, vA, vC, vD, vE, vK, b1, b2, b3, b5, b6, fol, b12"),
                 "v" to Schema.double(description = "Numeric value in required unit")
             )
         )
-        val labelSchema = Schema.obj(
+        Schema.obj(
             properties = mapOf(
                 "name" to Schema.string(description = "Product or supplement name"),
                 "barcode" to Schema.string(description = "Barcode digits if visible"),
@@ -110,17 +134,9 @@ class GeminiAiRepository {
             ),
             optionalProperties = listOf("name", "barcode", "serving_g", "is_supplement", "serving_unit", "nutrients")
         )
-        Firebase.ai.generativeModel(
-            modelName = MODEL_NAME,
-            generationConfig = generationConfig {
-                temperature = 0.1f
-                responseMimeType = "application/json"
-                responseSchema = labelSchema
-            }
-        )
     }
 
-    private val mealFoodsModel by lazy {
+    private val foodsSchema: Schema by lazy {
         val fallbackSchema = Schema.obj(
             properties = mapOf(
                 "kcal" to Schema.double(),
@@ -140,39 +156,57 @@ class GeminiAiRepository {
             ),
             optionalProperties = listOf("per100")
         )
-        val foodsSchema = Schema.obj(
+        Schema.obj(
             properties = mapOf(
                 "items" to Schema.array(items = itemSchema, description = "Distinct foods identified")
             )
         )
-        Firebase.ai.generativeModel(
-            modelName = MODEL_NAME,
-            generationConfig = generationConfig {
-                temperature = 0.2f
-                responseMimeType = "application/json"
-                responseSchema = foodsSchema
-            }
-        )
     }
 
-    private val barcodeModel by lazy {
-        val barcodeSchema = Schema.obj(
+    private val barcodeSchema: Schema by lazy {
+        Schema.obj(
             properties = mapOf(
                 "digits" to Schema.string(description = "Exact numeric barcode digits under the bars")
             ),
             optionalProperties = listOf("digits")
         )
-        Firebase.ai.generativeModel(
-            modelName = MODEL_NAME,
-            generationConfig = generationConfig {
-                temperature = 0.0f
-                responseMimeType = "application/json"
-                responseSchema = barcodeSchema
-            }
-        )
     }
 
-    suspend fun parseInBodySheet(bitmap: Bitmap): Result<BodyRecord> = runAiCall {
+    private fun buildModel(
+        modelName: String,
+        schema: Schema,
+        temp: Float,
+        lowThinking: Boolean
+    ): GenerativeModel = Firebase.ai.generativeModel(
+        modelName = modelName,
+        generationConfig = generationConfig {
+            temperature = temp
+            responseMimeType = "application/json"
+            responseSchema = schema
+            if (lowThinking) {
+                thinkingConfig = thinkingConfig {
+                    thinkingLevel = ThinkingLevel.LOW
+                }
+            }
+        }
+    )
+
+    private val inBodyPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, inBodySchema, 0.1f, lowThinking = true) }
+    private val inBodyFallback by lazy { buildModel(FALLBACK_MODEL_NAME, inBodySchema, 0.1f, lowThinking = false) }
+
+    private val labelPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, labelSchema, 0.1f, lowThinking = true) }
+    private val labelFallback by lazy { buildModel(FALLBACK_MODEL_NAME, labelSchema, 0.1f, lowThinking = false) }
+
+    private val foodsPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, foodsSchema, 0.2f, lowThinking = true) }
+    private val foodsFallback by lazy { buildModel(FALLBACK_MODEL_NAME, foodsSchema, 0.2f, lowThinking = false) }
+
+    private val barcodePrimary by lazy { buildModel(PRIMARY_MODEL_NAME, barcodeSchema, 0.0f, lowThinking = true) }
+    private val barcodeFallback by lazy { buildModel(FALLBACK_MODEL_NAME, barcodeSchema, 0.0f, lowThinking = false) }
+
+    suspend fun parseInBodySheet(
+        bitmap: Bitmap,
+        onProgress: (String) -> Unit = {}
+    ): Result<BodyRecord> = runAiCall {
         val prompt = """
             Read this InBody body composition result sheet carefully.
             Extract all printed numeric measurements accurately and OMIT any field not printed (never guess).
@@ -182,15 +216,14 @@ class GeminiAiRepository {
             Format date as YYYY-MM-DD if printed.
         """.trimIndent()
 
-        val response = withTimeout(TIMEOUT_MS) {
-            inBodyModel.generateContent(
-                content {
-                    image(bitmap)
-                    text(prompt)
-                }
-            )
-        }
-        val rawText = response.text ?: throw IllegalStateException("لم يرجع Gemini أي بيانات من الصورة.")
+        val rawText = executeMultimodalJson(
+            bitmap = bitmap,
+            prompt = prompt,
+            taskLabel = "ورقة الـ InBody",
+            primaryModel = inBodyPrimary,
+            fallbackModel = inBodyFallback,
+            onProgress = onProgress
+        )
         val json = JSONObject(rawText)
 
         fun optD(k: String): Double? =
@@ -259,7 +292,10 @@ class GeminiAiRepository {
         )
     }
 
-    suspend fun parseNutritionLabel(bitmap: Bitmap): Result<AiLabelResult> = runAiCall {
+    suspend fun parseNutritionLabel(
+        bitmap: Bitmap,
+        onProgress: (String) -> Unit = {}
+    ): Result<AiLabelResult> = runAiCall {
         val prompt = """
             Read this Nutrition Facts or Supplement Facts label accurately.
             - If FOOD or POWDER with weights in grams: put values per 100g (or 100ml) in nutrients array; convert per-serving values to per 100g using serving_g; set is_supplement=false.
@@ -272,18 +308,21 @@ class GeminiAiRepository {
             Only include nutrients printed on the label; never guess unprinted values.
         """.trimIndent()
 
-        val response = withTimeout(TIMEOUT_MS) {
-            nutritionLabelModel.generateContent(
-                content {
-                    image(bitmap)
-                    text(prompt)
-                }
-            )
-        }
-        parseLabelJson(response.text ?: throw IllegalStateException("لم يرجع Gemini بيانات من الملصق."))
+        val rawText = executeMultimodalJson(
+            bitmap = bitmap,
+            prompt = prompt,
+            taskLabel = "الملصق الغذائي",
+            primaryModel = labelPrimary,
+            fallbackModel = labelFallback,
+            onProgress = onProgress
+        )
+        parseLabelJson(rawText)
     }
 
-    suspend fun lookupSupplementByName(supplementQuery: String): Result<AiLabelResult> = runAiCall {
+    suspend fun lookupSupplementByName(
+        supplementQuery: String,
+        onProgress: (String) -> Unit = {}
+    ): Result<AiLabelResult> = runAiCall {
         val prompt = """
             The user wants to log this dietary supplement / multivitamin / pharmacy product (Egyptian and international pharmacy brands are common): "$supplementQuery".
             Return its standard official active composition PER 1 TABLET / CAPSULE (or per 1 scoop if powder) inside "nutrients" array as {k, v} entries.
@@ -295,10 +334,14 @@ class GeminiAiRepository {
             Only include nutrients genuinely present in this product.
         """.trimIndent()
 
-        val response = withTimeout(TIMEOUT_MS) {
-            nutritionLabelModel.generateContent(prompt)
-        }
-        parseLabelJson(response.text ?: throw IllegalStateException("لم يرجع Gemini بيانات للمكمل."))
+        val rawText = executeTextJson(
+            prompt = prompt,
+            taskLabel = "تركيبة المكمل",
+            primaryModel = labelPrimary,
+            fallbackModel = labelFallback,
+            onProgress = onProgress
+        )
+        parseLabelJson(rawText)
     }
 
     private fun parseLabelJson(rawText: String): AiLabelResult {
@@ -332,7 +375,10 @@ class GeminiAiRepository {
         )
     }
 
-    suspend fun identifyMealPhoto(bitmap: Bitmap): Result<List<AiDetectedFoodRaw>> = runAiCall {
+    suspend fun identifyMealPhoto(
+        bitmap: Bitmap,
+        onProgress: (String) -> Unit = {}
+    ): Result<List<AiDetectedFoodRaw>> = runAiCall {
         val prompt = """
             Identify all foods visible in this meal photo. Egyptian and Middle Eastern dishes are common.
             List each distinct food item separately (e.g., rice, grilled chicken, salad, baladi bread, sauces).
@@ -340,18 +386,21 @@ class GeminiAiRepository {
             Be realistic, not optimistic.
         """.trimIndent()
 
-        val response = withTimeout(TIMEOUT_MS) {
-            mealFoodsModel.generateContent(
-                content {
-                    image(bitmap)
-                    text(prompt)
-                }
-            )
-        }
-        parseDetectedFoods(response.text)
+        val rawText = executeMultimodalJson(
+            bitmap = bitmap,
+            prompt = prompt,
+            taskLabel = "صورة الوجبة",
+            primaryModel = foodsPrimary,
+            fallbackModel = foodsFallback,
+            onProgress = onProgress
+        )
+        parseDetectedFoods(rawText)
     }
 
-    suspend fun estimateMealFromText(description: String): Result<List<AiDetectedFoodRaw>> = runAiCall {
+    suspend fun estimateMealFromText(
+        description: String,
+        onProgress: (String) -> Unit = {}
+    ): Result<List<AiDetectedFoodRaw>> = runAiCall {
         val prompt = """
             Identify the foods described here: "$description".
             Egyptian and Middle Eastern dishes are common.
@@ -359,26 +408,274 @@ class GeminiAiRepository {
             Be realistic, not optimistic.
         """.trimIndent()
 
-        val response = withTimeout(TIMEOUT_MS) {
-            mealFoodsModel.generateContent(prompt)
-        }
-        parseDetectedFoods(response.text)
+        val rawText = executeTextJson(
+            prompt = prompt,
+            taskLabel = "وصف الوجبة",
+            primaryModel = foodsPrimary,
+            fallbackModel = foodsFallback,
+            onProgress = onProgress
+        )
+        parseDetectedFoods(rawText)
     }
 
-    suspend fun readBarcodeFromImage(bitmap: Bitmap): Result<String?> = runAiCall {
+    suspend fun readBarcodeFromImage(
+        bitmap: Bitmap,
+        onProgress: (String) -> Unit = {}
+    ): Result<String?> = runAiCall {
         val prompt = "Read the exact numeric barcode digits printed under the barcode bars in this image. Do not guess if unreadable; omit digits."
-        val response = withTimeout(TIMEOUT_MS) {
-            barcodeModel.generateContent(
-                content {
-                    image(bitmap)
-                    text(prompt)
-                }
-            )
-        }
-        val rawText = response.text ?: return@runAiCall null
+        val rawText = executeMultimodalJson(
+            bitmap = bitmap,
+            prompt = prompt,
+            taskLabel = "رقم الباركود",
+            primaryModel = barcodePrimary,
+            fallbackModel = barcodeFallback,
+            onProgress = onProgress
+        )
         val json = JSONObject(rawText)
         val digits = if (json.isNull("digits")) "" else json.optString("digits", "").filter { it.isDigit() }
         digits.ifBlank { null }
+    }
+
+    private suspend fun executeMultimodalJson(
+        bitmap: Bitmap,
+        prompt: String,
+        taskLabel: String,
+        primaryModel: GenerativeModel,
+        fallbackModel: GenerativeModel,
+        onProgress: (String) -> Unit
+    ): String {
+        onProgress("1/3 تجهيز الصورة...")
+        val jpegBytes = withContext(Dispatchers.IO) {
+            compressBitmapToJpeg(bitmap)
+        }
+        val imageKb = (jpegBytes.size / 1024).coerceAtLeast(1)
+        val requestContent = content {
+            inlineData(jpegBytes, "image/jpeg")
+            text(prompt)
+        }
+        return executeWithAppCheckAndFallback(
+            requestContent = requestContent,
+            taskLabel = taskLabel,
+            imageKb = imageKb,
+            primaryModel = primaryModel,
+            fallbackModel = fallbackModel,
+            onProgress = onProgress
+        )
+    }
+
+    private suspend fun executeTextJson(
+        prompt: String,
+        taskLabel: String,
+        primaryModel: GenerativeModel,
+        fallbackModel: GenerativeModel,
+        onProgress: (String) -> Unit
+    ): String {
+        val requestContent = content { text(prompt) }
+        return executeWithAppCheckAndFallback(
+            requestContent = requestContent,
+            taskLabel = taskLabel,
+            imageKb = null,
+            primaryModel = primaryModel,
+            fallbackModel = fallbackModel,
+            onProgress = onProgress
+        )
+    }
+
+    private suspend fun executeWithAppCheckAndFallback(
+        requestContent: Content,
+        taskLabel: String,
+        imageKb: Int?,
+        primaryModel: GenerativeModel,
+        fallbackModel: GenerativeModel,
+        onProgress: (String) -> Unit
+    ): String {
+        val stepPrefix = if (imageKb != null) "2/3" else "1/2"
+        val finalPrefix = if (imageKb != null) "3/3" else "2/2"
+
+        // Phase 1: Explicitly acquire App Check token on Main dispatcher (non-blocking await)
+        // so we can distinguish reCAPTCHA/App Check hangs from Gemini inference latency.
+        onProgress("$stepPrefix التحقق الأمني (App Check)...")
+        val appCheckMs = ensureAppCheckToken()
+
+        // Phase 2: Stream from primary model (gemini-3.8-flash with LOW thinking)
+        val sizeSuffix = if (imageKb != null) " (${imageKb} KB)" else ""
+        onProgress("$finalPrefix جاري تحليل $taskLabel بـ Gemini$sizeSuffix...")
+
+        val primaryAttempt = streamJsonAttempt(
+            model = primaryModel,
+            modelName = PRIMARY_MODEL_NAME,
+            requestContent = requestContent,
+            timeoutMs = PRIMARY_TIMEOUT_MS,
+            onFirstChunk = { onProgress("$finalPrefix جاري استلام النتيجة من Gemini...") }
+        )
+        if (primaryAttempt.text != null) {
+            return primaryAttempt.text
+        }
+
+        // If the primary error is clearly an App Check / 403 / quota rejection, don't waste time retrying.
+        val primaryErrLower = primaryAttempt.errorChain.lowercase()
+        val isAuthOrQuotaError = primaryErrLower.contains("403") ||
+            primaryErrLower.contains("appcheck") ||
+            primaryErrLower.contains("app check") ||
+            primaryErrLower.contains("recaptcha") ||
+            primaryErrLower.contains("429") ||
+            primaryErrLower.contains("quota")
+
+        if (isAuthOrQuotaError) {
+            throw GeminiStreamStageException(
+                primaryModel = PRIMARY_MODEL_NAME,
+                primarySummary = primaryAttempt.summary,
+                fallbackModel = null,
+                fallbackSummary = null,
+                appCheckMs = appCheckMs,
+                imageKb = imageKb,
+                anyTimedOut = primaryAttempt.timedOut,
+                cause = primaryAttempt.error
+            )
+        }
+
+        // Phase 3: Automatic fast fallback to gemini-3.5-flash-lite
+        onProgress("$finalPrefix جاري المحاولة بنموذج Gemini السريع (flash-lite)...")
+        val fallbackAttempt = streamJsonAttempt(
+            model = fallbackModel,
+            modelName = FALLBACK_MODEL_NAME,
+            requestContent = requestContent,
+            timeoutMs = FALLBACK_TIMEOUT_MS,
+            onFirstChunk = { onProgress("$finalPrefix جاري استلام النتيجة من Gemini السريع...") }
+        )
+        if (fallbackAttempt.text != null) {
+            return fallbackAttempt.text
+        }
+
+        throw GeminiStreamStageException(
+            primaryModel = PRIMARY_MODEL_NAME,
+            primarySummary = primaryAttempt.summary,
+            fallbackModel = FALLBACK_MODEL_NAME,
+            fallbackSummary = fallbackAttempt.summary,
+            appCheckMs = appCheckMs,
+            imageKb = imageKb,
+            anyTimedOut = primaryAttempt.timedOut || fallbackAttempt.timedOut,
+            cause = fallbackAttempt.error ?: primaryAttempt.error
+        )
+    }
+
+    private suspend fun ensureAppCheckToken(): Long {
+        val start = System.currentTimeMillis()
+        return try {
+            withContext(Dispatchers.Main) {
+                withTimeout(APP_CHECK_TIMEOUT_MS) {
+                    FirebaseAppCheck.getInstance().getAppCheckToken(false).await()
+                }
+            }
+            val elapsed = System.currentTimeMillis() - start
+            Log.d(TAG, "App Check token ready in ${elapsed}ms ($appCheckInitSummary)")
+            elapsed
+        } catch (e: TimeoutCancellationException) {
+            val elapsed = System.currentTimeMillis() - start
+            Log.e(TAG, "App Check token timed out after ${elapsed}ms ($appCheckInitSummary)", e)
+            throw AppCheckStageException(timedOut = true, elapsedMs = elapsed, cause = e)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val elapsed = System.currentTimeMillis() - start
+            Log.e(TAG, "App Check token failed after ${elapsed}ms ($appCheckInitSummary)", e)
+            throw AppCheckStageException(timedOut = false, elapsedMs = elapsed, cause = e)
+        }
+    }
+
+    private data class StreamAttemptResult(
+        val text: String?,
+        val timedOut: Boolean,
+        val error: Throwable?,
+        val errorChain: String,
+        val summary: String
+    )
+
+    private suspend fun streamJsonAttempt(
+        model: GenerativeModel,
+        modelName: String,
+        requestContent: Content,
+        timeoutMs: Long,
+        onFirstChunk: () -> Unit
+    ): StreamAttemptResult {
+        val start = System.currentTimeMillis()
+        var chunks = 0
+        var firstChunkMs = -1L
+        val buffer = StringBuilder()
+
+        return try {
+            withContext(Dispatchers.IO) {
+                withTimeout(timeoutMs) {
+                    model.generateContentStream(requestContent).collect { chunk ->
+                        val piece = chunk.text.orEmpty()
+                        if (piece.isNotEmpty()) {
+                            if (chunks == 0) {
+                                firstChunkMs = System.currentTimeMillis() - start
+                                withContext(Dispatchers.Main) { onFirstChunk() }
+                            }
+                            chunks++
+                            buffer.append(piece)
+                        }
+                    }
+                }
+            }
+            val finalText = buffer.toString().trim()
+            if (finalText.isBlank()) {
+                val elapsed = System.currentTimeMillis() - start
+                val err = IllegalStateException("Empty response from $modelName")
+                StreamAttemptResult(
+                    text = null,
+                    timedOut = false,
+                    error = err,
+                    errorChain = err.message.orEmpty(),
+                    summary = "$modelName: empty after ${elapsed}ms (chunks=$chunks)"
+                )
+            } else {
+                Log.d(TAG, "$modelName succeeded in ${System.currentTimeMillis() - start}ms (ttft=${firstChunkMs}ms, chunks=$chunks, chars=${finalText.length})")
+                StreamAttemptResult(
+                    text = finalText,
+                    timedOut = false,
+                    error = null,
+                    errorChain = "",
+                    summary = "ok"
+                )
+            }
+        } catch (e: TimeoutCancellationException) {
+            val elapsed = System.currentTimeMillis() - start
+            Log.w(TAG, "$modelName timed out after ${elapsed}ms (chunks=$chunks, chars=${buffer.length})")
+            StreamAttemptResult(
+                text = null,
+                timedOut = true,
+                error = e,
+                errorChain = "TimeoutCancellationException(${timeoutMs / 1000}s)",
+                summary = "$modelName: timeout ${elapsed / 1000}s (chunks=$chunks, chars=${buffer.length})"
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val elapsed = System.currentTimeMillis() - start
+            val chain = unwrapCauseChain(e)
+            Log.w(TAG, "$modelName failed after ${elapsed}ms: $chain", e)
+            StreamAttemptResult(
+                text = null,
+                timedOut = false,
+                error = e,
+                errorChain = chain,
+                summary = "$modelName: ${elapsed / 1000}s, chunks=$chunks, $chain"
+            )
+        }
+    }
+
+    private fun compressBitmapToJpeg(bitmap: Bitmap): ByteArray {
+        val out = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
+        var bytes = out.toByteArray()
+        if (bytes.size > 450 * 1024) {
+            out.reset()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 65, out)
+            bytes = out.toByteArray()
+        }
+        return bytes
     }
 
     private fun parseDetectedFoods(rawText: String?): List<AiDetectedFoodRaw> {
@@ -409,16 +706,60 @@ class GeminiAiRepository {
         return result
     }
 
-    private fun formatAiError(error: Throwable): String {
-        val chain = generateSequence(error) { it.cause }
+    private fun unwrapCauseChain(error: Throwable): String =
+        generateSequence(error) { it.cause }
             .map { t ->
                 val cls = t.javaClass.simpleName.ifBlank { "Error" }
                 val msg = t.message?.trim().orEmpty()
                 if (msg.isNotBlank()) "$cls: $msg" else cls
             }
             .distinct()
-            .toList()
-        val combined = chain.joinToString(" ← ")
+            .joinToString(" ← ")
+
+    private fun formatAiError(error: Throwable): String {
+        if (error is AppCheckStageException) {
+            val causeText = error.cause?.let { unwrapCauseChain(it) }.orEmpty()
+            val sec = (error.elapsedMs / 1000L).coerceAtLeast(1L)
+            return if (error.timedOut) {
+                "انتهى وقت التحقق الأمني (App Check / reCAPTCHA) بعد $sec ثانية قبل الاتصال بـ Gemini.\n" +
+                    "[Stage=AppCheck-Timeout | init=$appCheckInitSummary | ${error.elapsedMs}ms]"
+            } else {
+                "تعذّر التحقق الأمني (App Check / reCAPTCHA) قبل الاتصال بـ Gemini.\n" +
+                    "[Stage=AppCheck-Error | init=$appCheckInitSummary | ${error.elapsedMs}ms] ($causeText)"
+            }
+        }
+
+        if (error is GeminiStreamStageException) {
+            val details = buildString {
+                append("[Stage=Gemini | appCheck=${error.appCheckMs}ms")
+                if (error.imageKb != null) append(" | img=${error.imageKb}KB")
+                append(" | init=$appCheckInitSummary]\n")
+                append("1) ${error.primarySummary}")
+                if (!error.fallbackSummary.isNullOrBlank()) {
+                    append("\n2) ${error.fallbackSummary}")
+                }
+            }
+            val lower = details.lowercase()
+            val prefix = when {
+                lower.contains("403") || lower.contains("appcheck") || lower.contains("app check") || lower.contains("recaptcha") || lower.contains("attestation") ->
+                    "رفض الخادم التحقق الأمني (App Check / reCAPTCHA) عند الاتصال بـ Gemini."
+
+                lower.contains("429") || lower.contains("quota") || lower.contains("resource_exhausted") ->
+                    "تم تجاوز حد الطلبات المؤقت لـ Gemini. انتظر قليلًا ثم جرّب مرة أخرى."
+
+                error.anyTimedOut ->
+                    "انتهى وقت انتظار رد Gemini (بعد تجربة النموذج الأساسي والسريع). تأكد من الإنترنت وجرّب مرة تانية."
+
+                lower.contains("unknownhost") || lower.contains("connect") || lower.contains("network") || lower.contains("socket") ->
+                    "مشكلة في اتصال الإنترنت أثناء الإرسال إلى Gemini."
+
+                else ->
+                    "تعذّر التحليل بواسطة Gemini."
+            }
+            return "$prefix\n$details"
+        }
+
+        val combined = unwrapCauseChain(error)
         val lower = combined.lowercase()
         val friendlyPrefix = when {
             lower.contains("403") || lower.contains("appcheck") || lower.contains("app check") || lower.contains("recaptcha") || lower.contains("attestation") ->
@@ -433,16 +774,11 @@ class GeminiAiRepository {
             else ->
                 "تعذّر التحليل بواسطة Gemini."
         }
-        return "$friendlyPrefix\n($combined)"
+        return "$friendlyPrefix\n[init=$appCheckInitSummary] ($combined)"
     }
 
     private suspend inline fun <T> runAiCall(crossinline block: suspend () -> T): Result<T> = try {
-        withContext(Dispatchers.IO) {
-            Result.success(block())
-        }
-    } catch (e: TimeoutCancellationException) {
-        Log.e(TAG, "Gemini AI call timed out after ${TIMEOUT_MS}ms", e)
-        Result.failure(Exception("انتهى وقت الاتصال بـ Gemini بعد 60 ثانية. تأكد من استقرار الإنترنت وجرّب صورة أوضح."))
+        Result.success(block())
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {

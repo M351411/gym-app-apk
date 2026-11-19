@@ -640,7 +640,9 @@ class MainViewModel(
             _foodSheetAi.update {
                 it.copy(busyMessage = "Gemini بيقرا الملصق / علبة الفيتامينات وبيملى الخانات تلقائيًا...", errorOrInfo = null, labelDraft = null)
             }
-            val result = geminiRepo.parseNutritionLabel(bitmap)
+            val result = geminiRepo.parseNutritionLabel(bitmap) { stage ->
+                _foodSheetAi.update { it.copy(busyMessage = stage) }
+            }
             result.fold(
                 onSuccess = { label ->
                     val mergedBc = label.barcode.ifBlank { _foodSheetAi.value.barcodeInput }
@@ -679,7 +681,9 @@ class MainViewModel(
             _foodSheetAi.update {
                 it.copy(busyMessage = "Gemini بيجيب تركيبة \"$query\" وبيملى الفيتامينات والمعادن تلقائيًا...", errorOrInfo = null, labelDraft = null)
             }
-            val result = geminiRepo.lookupSupplementByName(query.trim())
+            val result = geminiRepo.lookupSupplementByName(query.trim()) { stage ->
+                _foodSheetAi.update { it.copy(busyMessage = stage) }
+            }
             result.fold(
                 onSuccess = { label ->
                     _foodSheetAi.update {
@@ -708,7 +712,9 @@ class MainViewModel(
             _foodSheetAi.update {
                 it.copy(busyMessage = "Gemini بيتعرّف على الأصناف وبيقدّر الجرامات...", errorOrInfo = null, detectedItems = emptyList())
             }
-            val result = geminiRepo.identifyMealPhoto(bitmap)
+            val result = geminiRepo.identifyMealPhoto(bitmap) { stage ->
+                _foodSheetAi.update { it.copy(busyMessage = stage) }
+            }
             handleDetectedFoodsResult(result)
         }
     }
@@ -722,7 +728,9 @@ class MainViewModel(
             _foodSheetAi.update {
                 it.copy(busyMessage = "Gemini بيحلل الوصف وبيطابق الأصناف...", errorOrInfo = null, detectedItems = emptyList())
             }
-            val result = geminiRepo.estimateMealFromText(description.trim())
+            val result = geminiRepo.estimateMealFromText(description.trim()) { stage ->
+                _foodSheetAi.update { it.copy(busyMessage = stage) }
+            }
             handleDetectedFoodsResult(result)
         }
     }
@@ -780,7 +788,9 @@ class MainViewModel(
             _foodSheetAi.update {
                 it.copy(busyMessage = "Gemini بيقرا رقم الباركود من الصورة...", errorOrInfo = null)
             }
-            val res = geminiRepo.readBarcodeFromImage(bitmap)
+            val res = geminiRepo.readBarcodeFromImage(bitmap) { stage ->
+                _foodSheetAi.update { it.copy(busyMessage = stage) }
+            }
             res.fold(
                 onSuccess = { digits ->
                     if (digits.isNullOrBlank()) {
@@ -861,7 +871,9 @@ class MainViewModel(
     fun scanInBodySheetWithGemini(bitmap: Bitmap) {
         viewModelScope.launch {
             _bodyDraft.update { it.copy(aiBusy = true, aiStatusMessage = "Gemini بيقرا ورقة الـ InBody وبيملى الخانات تلقائيًا...") }
-            val res = geminiRepo.parseInBodySheet(bitmap)
+            val res = geminiRepo.parseInBodySheet(bitmap) { stage ->
+                _bodyDraft.update { it.copy(aiStatusMessage = stage) }
+            }
             res.fold(
                 onSuccess = { rec ->
                     val f = mutableMapOf<String, String>()

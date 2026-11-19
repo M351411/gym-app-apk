@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -42,7 +43,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -219,6 +222,7 @@ fun BodyScreen(
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
                         if (!bodyDraft.aiStatusMessage.isNullOrBlank()) {
+                            val clipboard = LocalClipboardManager.current
                             val isSuccess = bodyDraft.aiStatusMessage.contains("✅")
                             val isError = !bodyDraft.aiBusy && !isSuccess
                             Surface(
@@ -227,13 +231,40 @@ fun BodyScreen(
                                 else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text(
-                                    text = bodyDraft.aiStatusMessage,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = if (isError) MaterialTheme.colorScheme.onErrorContainer
-                                    else MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.padding(10.dp)
-                                )
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = bodyDraft.aiStatusMessage,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (isError) MaterialTheme.colorScheme.onErrorContainer
+                                        else MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    if (isError) {
+                                        TextButton(
+                                            onClick = {
+                                                clipboard.setText(AnnotatedString(bodyDraft.aiStatusMessage))
+                                                viewModel.showToast("تم نسخ تفاصيل الخطأ")
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                            modifier = Modifier.testTag("inbody_copy_error_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.ContentCopy,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                text = "نسخ تفاصيل الخطأ",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.onErrorContainer
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
 

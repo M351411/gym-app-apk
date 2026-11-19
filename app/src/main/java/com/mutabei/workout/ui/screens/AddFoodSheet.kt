@@ -21,6 +21,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarBorder
@@ -52,8 +53,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -228,12 +231,49 @@ fun AddFoodSheet(
 
                 // AI Status / Error message
                 if (!aiState.errorOrInfo.isNullOrBlank()) {
-                    Text(
-                        text = aiState.errorOrInfo,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = LocalSemanticColors.current.warn,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                    val clipboard = LocalClipboardManager.current
+                    val isSuccess = aiState.errorOrInfo.contains("✅") || aiState.errorOrInfo.contains("Open Food Facts")
+                    Surface(
+                        shape = MaterialTheme.shapes.small,
+                        color = if (isSuccess) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                        else MaterialTheme.colorScheme.errorContainer,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = aiState.errorOrInfo,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isSuccess) MaterialTheme.colorScheme.onPrimaryContainer
+                                else MaterialTheme.colorScheme.onErrorContainer,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            if (!isSuccess) {
+                                TextButton(
+                                    onClick = {
+                                        clipboard.setText(AnnotatedString(aiState.errorOrInfo))
+                                        viewModel.showToast("تم نسخ تفاصيل الخطأ")
+                                    },
+                                    modifier = Modifier.testTag("food_ai_copy_error_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.ContentCopy,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = "نسخ تفاصيل الخطأ",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
 
                 when (mode) {
