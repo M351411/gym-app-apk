@@ -51,6 +51,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -73,6 +74,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.google.firebase.Firebase
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
 import com.mutabei.workout.data.model.UiState
@@ -89,7 +91,6 @@ import com.mutabei.workout.ui.screens.SettingsSheet
 import com.mutabei.workout.ui.screens.WorkoutScreen
 import com.mutabei.workout.ui.theme.LocalSemanticColors
 import com.mutabei.workout.ui.theme.MutabeiTheme
-import com.mutabei.workout.ui.util.authStateFlow
 import com.mutabei.workout.ui.viewmodel.AppDataSnapshot
 import com.mutabei.workout.ui.viewmodel.MainTab
 import com.mutabei.workout.ui.viewmodel.MainViewModel
@@ -106,15 +107,25 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                val authFlow = remember { Firebase.auth.authStateFlow() }
-                val currentUser by authFlow.collectAsStateWithLifecycle(initialValue = Firebase.auth.currentUser)
+                var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
+                DisposableEffect(Unit) {
+                    val listener = FirebaseAuth.AuthStateListener { auth ->
+                        currentUser = auth.currentUser
+                    }
+                    Firebase.auth.addAuthStateListener(listener)
+                    onDispose { Firebase.auth.removeAuthStateListener(listener) }
+                }
 
-                if (currentUser == null) {
+                val activeUser = currentUser
+                if (activeUser == null) {
                     MutabeiTheme {
-                        AuthScreen(onAuthSuccess = {})
+                        AuthScreen(
+                            onAuthSuccess = {
+                                currentUser = Firebase.auth.currentUser
+                            }
+                        )
                     }
                 } else {
-                    val activeUser = currentUser!!
                     key(activeUser.uid) {
                         MainAppShell(user = activeUser)
                     }

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <resources>
-    <string name="firestore_database_id" translatable="false">ai-studio-android-gymappap-c1000014-6bde-4629-ae36-1bb602ea7657</string>
+    <string name="firestore_database_id" translatable="false">ai-studio-android-gymappap-b43e1d29-ac66-4edb-ad60-56693c5cd78f</string>
     <string name="recaptcha_site_key" translatable="false">6LeSbycuAAAAALOoMAcC2Lsv0EcD7LUQTKXuxn5V</string>
 </resources>
