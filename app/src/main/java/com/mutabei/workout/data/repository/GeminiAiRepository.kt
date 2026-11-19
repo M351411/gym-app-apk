@@ -32,8 +32,8 @@ private const val PRIMARY_MODEL_NAME = "gemini-3.8-flash"
 private const val FALLBACK_MODEL_NAME = "gemini-3.5-flash-lite"
 
 private const val APP_CHECK_TIMEOUT_MS = 20_000L
-private const val PRIMARY_TIMEOUT_MS = 35_000L
-private const val FALLBACK_TIMEOUT_MS = 25_000L
+private const val PRIMARY_TIMEOUT_MS = 45_000L
+private const val FALLBACK_TIMEOUT_MS = 30_000L
 
 private class AppCheckStageException(
     val timedOut: Boolean,
@@ -57,59 +57,59 @@ private class GeminiStreamStageException(
 
 class GeminiAiRepository {
 
-    private fun segmentalSchema(): Schema = Schema.obj(
+    private fun segmentalSchema(description: String): Schema = Schema.obj(
+        description = description,
         properties = mapOf(
-            "la" to Schema.double(description = "Left arm"),
-            "ra" to Schema.double(description = "Right arm"),
-            "tr" to Schema.double(description = "Trunk"),
-            "ll" to Schema.double(description = "Left leg"),
-            "rl" to Schema.double(description = "Right leg")
+            "left_arm" to Schema.double(description = "Left Arm value", nullable = true),
+            "right_arm" to Schema.double(description = "Right Arm value", nullable = true),
+            "trunk" to Schema.double(description = "Trunk value", nullable = true),
+            "left_leg" to Schema.double(description = "Left Leg value", nullable = true),
+            "right_leg" to Schema.double(description = "Right Leg value", nullable = true)
         ),
-        optionalProperties = listOf("la", "ra", "tr", "ll", "rl")
+        nullable = true
     )
 
     private val inBodySchema: Schema by lazy {
         val rangeItemSchema = Schema.obj(
             properties = mapOf(
-                "k" to Schema.string(description = "Metric key: w, bfm, ffm, tbw, pro, min, bmr, whr, or vfl"),
-                "lo" to Schema.double(description = "Lower bound of printed normal range"),
-                "hi" to Schema.double(description = "Upper bound of printed normal range")
+                "metric_key" to Schema.string(description = "One of: w, bfm, ffm, tbw, pro, min, bmr, whr, vfl"),
+                "low" to Schema.double(description = "Lower bound of printed normal range"),
+                "high" to Schema.double(description = "Upper bound of printed normal range")
             )
         )
+        // Keep every core field REQUIRED with nullable=true so Gemini is forced
+        // to inspect and report every single measurement instead of stopping early.
         Schema.obj(
             properties = mapOf(
-                "date" to Schema.string(description = "YYYY-MM-DD test date printed on sheet"),
-                "h" to Schema.double(description = "Height in cm"),
-                "w" to Schema.double(description = "Weight in kg"),
-                "tbw" to Schema.double(description = "Total body water in L"),
-                "pro" to Schema.double(description = "Protein in kg"),
-                "min" to Schema.double(description = "Minerals in kg"),
-                "bfm" to Schema.double(description = "Body fat mass in kg"),
-                "ffm" to Schema.double(description = "Fat free mass in kg"),
-                "smm" to Schema.double(description = "Skeletal muscle mass in kg"),
-                "pbf" to Schema.double(description = "Percent body fat %"),
-                "bmi" to Schema.double(description = "BMI"),
-                "bmr" to Schema.double(description = "Basal metabolic rate in kcal"),
-                "whr" to Schema.double(description = "Waist-hip ratio"),
-                "vfl" to Schema.double(description = "Visceral fat level"),
-                "obd" to Schema.double(description = "Obesity degree %"),
-                "score" to Schema.double(description = "InBody score out of 100"),
-                "tgt" to Schema.double(description = "Target weight in kg"),
-                "fc" to Schema.double(description = "Fat control in kg"),
-                "mc" to Schema.double(description = "Muscle control in kg"),
-                "sl_kg" to segmentalSchema(),
-                "sl_pct" to segmentalSchema(),
-                "sf_kg" to segmentalSchema(),
-                "ranges" to Schema.array(
+                "test_date" to Schema.string(description = "Test date printed on sheet formatted as YYYY-MM-DD", nullable = true),
+                "height_cm" to Schema.double(description = "Height in cm", nullable = true),
+                "weight_kg" to Schema.double(description = "Total body weight in kg (from Body Composition table or Weight bar in Muscle-Fat Analysis)", nullable = true),
+                "skeletal_muscle_mass_kg" to Schema.double(description = "Skeletal Muscle Mass (SMM) in kg from Muscle-Fat Analysis bar", nullable = true),
+                "body_fat_mass_kg" to Schema.double(description = "Body Fat Mass (BFM) in kg", nullable = true),
+                "percent_body_fat" to Schema.double(description = "Percent Body Fat (PBF %) from Obesity Analysis bar", nullable = true),
+                "fat_free_mass_kg" to Schema.double(description = "Fat Free Mass (FFM) or Lean Body Mass in kg", nullable = true),
+                "total_body_water_l" to Schema.double(description = "Total Body Water (TBW) in L or kg", nullable = true),
+                "protein_kg" to Schema.double(description = "Protein mass in kg", nullable = true),
+                "minerals_kg" to Schema.double(description = "Minerals mass in kg", nullable = true),
+                "bmi" to Schema.double(description = "Body Mass Index (BMI) in kg/m2", nullable = true),
+                "bmr_kcal" to Schema.double(description = "Basal Metabolic Rate (BMR) in kcal", nullable = true),
+                "waist_hip_ratio" to Schema.double(description = "Waist-Hip Ratio (WHR), e.g. 0.95", nullable = true),
+                "visceral_fat_level" to Schema.double(description = "Visceral Fat Level (VFL), e.g. 10", nullable = true),
+                "obesity_degree_percent" to Schema.double(description = "Obesity Degree in %", nullable = true),
+                "inbody_score" to Schema.double(description = "InBody Score out of 100 (e.g. 74 from 74/100)", nullable = true),
+                "target_weight_kg" to Schema.double(description = "Target Weight in kg from Weight Control section", nullable = true),
+                "fat_control_kg" to Schema.double(description = "Fat Control in kg (keep negative sign if printed, e.g. -8.5)", nullable = true),
+                "muscle_control_kg" to Schema.double(description = "Muscle Control in kg (keep sign if printed, e.g. 4.2)", nullable = true),
+                "segmental_lean_kg" to segmentalSchema("Segmental Lean Analysis upper bar values in kg"),
+                "segmental_lean_percent" to segmentalSchema("Segmental Lean Analysis lower bar values in %"),
+                "segmental_fat_kg" to segmentalSchema("Segmental Fat Analysis values in kg"),
+                "normal_ranges" to Schema.array(
                     items = rangeItemSchema,
-                    description = "Normal ranges printed in brackets next to values"
+                    description = "Normal ranges printed in parentheses or brackets next to values, e.g. (58.0~78.4)",
+                    nullable = true
                 )
             ),
-            optionalProperties = listOf(
-                "date", "h", "w", "tbw", "pro", "min", "bfm", "ffm", "smm", "pbf",
-                "bmi", "bmr", "whr", "vfl", "obd", "score", "tgt", "fc", "mc",
-                "sl_kg", "sl_pct", "sf_kg", "ranges"
-            )
+            optionalProperties = listOf("segmental_fat_kg", "normal_ranges")
         )
     }
 
@@ -122,30 +122,28 @@ class GeminiAiRepository {
         )
         Schema.obj(
             properties = mapOf(
-                "name" to Schema.string(description = "Product or supplement name"),
-                "barcode" to Schema.string(description = "Barcode digits if visible"),
-                "serving_g" to Schema.double(description = "Serving size in grams; use 100 for per-tablet/capsule supplements"),
+                "name" to Schema.string(description = "Product or supplement name", nullable = true),
+                "barcode" to Schema.string(description = "Barcode digits if visible", nullable = true),
+                "serving_g" to Schema.double(description = "Serving size in grams; use 100 for per-tablet/capsule supplements", nullable = true),
                 "is_supplement" to Schema.boolean(description = "True if vitamin, mineral, multivitamin, omega-3, or tablet/capsule supplement"),
-                "serving_unit" to Schema.string(description = "Arabic unit for one serving if supplement: قرص, كبسولة, سكوب, كيس"),
+                "serving_unit" to Schema.string(description = "Arabic unit for one serving if supplement: قرص, كبسولة, سكوب, كيس", nullable = true),
                 "nutrients" to Schema.array(
                     items = nutrientEntrySchema,
-                    description = "List of printed nutrients only"
+                    description = "All nutrients printed on the label"
                 )
-            ),
-            optionalProperties = listOf("name", "barcode", "serving_g", "is_supplement", "serving_unit", "nutrients")
+            )
         )
     }
 
     private val foodsSchema: Schema by lazy {
         val fallbackSchema = Schema.obj(
             properties = mapOf(
-                "kcal" to Schema.double(),
-                "p" to Schema.double(),
-                "f" to Schema.double(),
-                "c" to Schema.double(),
-                "fib" to Schema.double()
-            ),
-            optionalProperties = listOf("kcal", "p", "f", "c", "fib")
+                "kcal" to Schema.double(nullable = true),
+                "p" to Schema.double(nullable = true),
+                "f" to Schema.double(nullable = true),
+                "c" to Schema.double(nullable = true),
+                "fib" to Schema.double(nullable = true)
+            )
         )
         val itemSchema = Schema.obj(
             properties = mapOf(
@@ -153,8 +151,7 @@ class GeminiAiRepository {
                 "name_ar" to Schema.string(description = "Natural Arabic food name"),
                 "grams" to Schema.double(description = "Realistic estimated weight eaten in grams"),
                 "per100" to fallbackSchema
-            ),
-            optionalProperties = listOf("per100")
+            )
         )
         Schema.obj(
             properties = mapOf(
@@ -166,9 +163,8 @@ class GeminiAiRepository {
     private val barcodeSchema: Schema by lazy {
         Schema.obj(
             properties = mapOf(
-                "digits" to Schema.string(description = "Exact numeric barcode digits under the bars")
-            ),
-            optionalProperties = listOf("digits")
+                "digits" to Schema.string(description = "Exact numeric barcode digits under the bars", nullable = true)
+            )
         )
     }
 
@@ -176,44 +172,77 @@ class GeminiAiRepository {
         modelName: String,
         schema: Schema,
         temp: Float,
-        lowThinking: Boolean
+        thinking: ThinkingLevel?
     ): GenerativeModel = Firebase.ai.generativeModel(
         modelName = modelName,
         generationConfig = generationConfig {
             temperature = temp
             responseMimeType = "application/json"
             responseSchema = schema
-            if (lowThinking) {
+            if (thinking != null) {
                 thinkingConfig = thinkingConfig {
-                    thinkingLevel = ThinkingLevel.LOW
+                    thinkingLevel = thinking
                 }
             }
         }
     )
 
-    private val inBodyPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, inBodySchema, 0.1f, lowThinking = true) }
-    private val inBodyFallback by lazy { buildModel(FALLBACK_MODEL_NAME, inBodySchema, 0.1f, lowThinking = false) }
+    // InBody sheets are dense A4 tables + bar graphs: MEDIUM thinking gives much higher OCR completeness.
+    private val inBodyPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, inBodySchema, 0.0f, ThinkingLevel.MEDIUM) }
+    private val inBodyFallback by lazy { buildModel(FALLBACK_MODEL_NAME, inBodySchema, 0.0f, thinking = null) }
 
-    private val labelPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, labelSchema, 0.1f, lowThinking = true) }
-    private val labelFallback by lazy { buildModel(FALLBACK_MODEL_NAME, labelSchema, 0.1f, lowThinking = false) }
+    private val labelPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, labelSchema, 0.1f, ThinkingLevel.LOW) }
+    private val labelFallback by lazy { buildModel(FALLBACK_MODEL_NAME, labelSchema, 0.1f, thinking = null) }
 
-    private val foodsPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, foodsSchema, 0.2f, lowThinking = true) }
-    private val foodsFallback by lazy { buildModel(FALLBACK_MODEL_NAME, foodsSchema, 0.2f, lowThinking = false) }
+    private val foodsPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, foodsSchema, 0.2f, ThinkingLevel.LOW) }
+    private val foodsFallback by lazy { buildModel(FALLBACK_MODEL_NAME, foodsSchema, 0.2f, thinking = null) }
 
-    private val barcodePrimary by lazy { buildModel(PRIMARY_MODEL_NAME, barcodeSchema, 0.0f, lowThinking = true) }
-    private val barcodeFallback by lazy { buildModel(FALLBACK_MODEL_NAME, barcodeSchema, 0.0f, lowThinking = false) }
+    private val barcodePrimary by lazy { buildModel(PRIMARY_MODEL_NAME, barcodeSchema, 0.0f, ThinkingLevel.LOW) }
+    private val barcodeFallback by lazy { buildModel(FALLBACK_MODEL_NAME, barcodeSchema, 0.0f, thinking = null) }
 
     suspend fun parseInBodySheet(
         bitmap: Bitmap,
         onProgress: (String) -> Unit = {}
     ): Result<BodyRecord> = runAiCall {
         val prompt = """
-            Read this InBody body composition result sheet carefully.
-            Extract all printed numeric measurements accurately and OMIT any field not printed (never guess).
-            Segmental maps: sl_kg = Segmental Lean (kg), sl_pct = Segmental Lean (%), sf_kg = Segmental Fat (kg), using keys la (left arm), ra (right arm), tr (trunk), ll (left leg), rl (right leg).
-            For ranges, include printed [low, high] normal range brackets with k in [w, bfm, ffm, tbw, pro, min, bmr, whr, vfl].
-            Ignore personal identifiers (name, ID, phone, address).
-            Format date as YYYY-MM-DD if printed.
+            You are an expert OCR extractor for body composition result sheets (InBody 120/270/370/570/770, Tanita, Accuniq, Charder, BioSpace, English or Arabic).
+            Carefully scan EVERY section of the entire page from top to bottom and left to right, and extract EVERY printed numeric value into the JSON schema:
+
+            1. Header:
+               - test_date (YYYY-MM-DD), height_cm. Ignore personal name/ID/phone.
+            2. Body Composition Analysis table (top-left):
+               - total_body_water_l (Total Body Water / TBW / الماء)
+               - protein_kg (Protein / البروتين)
+               - minerals_kg (Minerals / المعادن)
+               - body_fat_mass_kg (Body Fat Mass / BFM / كتلة الدهون)
+               - fat_free_mass_kg (Fat Free Mass / FFM / Lean Body Mass)
+               - weight_kg (Weight / الوزن)
+               - normal_ranges: read the normal range printed in parentheses/brackets next to each value, e.g. (58.0~78.4) or [10.0-20.0], with metric_key in [w, bfm, ffm, tbw, pro, min, bmr, whr, vfl].
+            3. Muscle-Fat Analysis horizontal bar graph (middle-left):
+               - Read the BOLD measured value printed at the right end of each dark horizontal bar (NOT the reference percentage header numbers 55, 70, 85, 100, 115!):
+                 * Weight -> weight_kg
+                 * SMM / Skeletal Muscle Mass -> skeletal_muscle_mass_kg
+                 * Body Fat Mass -> body_fat_mass_kg
+            4. Obesity Analysis horizontal bar graph:
+               - Read the measured value at the end of each dark bar:
+                 * BMI -> bmi
+                 * PBF / Percent Body Fat -> percent_body_fat
+            5. Segmental Lean Analysis (bottom-left torso diagram with 5 sections: Right Arm, Left Arm, Trunk, Right Leg, Left Leg):
+               - Upper number (kg) -> segmental_lean_kg (right_arm, left_arm, trunk, right_leg, left_leg)
+               - Lower number (%) -> segmental_lean_percent (right_arm, left_arm, trunk, right_leg, left_leg)
+               - If Segmental Fat Analysis is printed, put kg values in segmental_fat_kg.
+            6. Right column (InBody Score, Weight Control, Research Parameters, Visceral Fat, Obesity Evaluation):
+               - inbody_score: the score before "/100" (e.g. "76 / 100 Points" -> 76)
+               - target_weight_kg, fat_control_kg (keep minus sign e.g. -8.4), muscle_control_kg (keep sign e.g. 3.5)
+               - bmr_kcal (Basal Metabolic Rate in kcal, e.g. 1750)
+               - waist_hip_ratio (WHR, e.g. 0.95)
+               - visceral_fat_level (VFL / Visceral Fat Level, e.g. 10)
+               - obesity_degree_percent (Obesity Degree %, e.g. 112)
+
+            Important rules:
+            - Extract EVERY number that is visible anywhere on the sheet. Do NOT skip fields that are printed in bar charts or the right column!
+            - Set a field to null ONLY if that measurement genuinely does not exist on the sheet.
+            - If the image is slightly tilted or rotated, still read all sections accurately.
         """.trimIndent()
 
         val rawText = executeMultimodalJson(
@@ -222,38 +251,54 @@ class GeminiAiRepository {
             taskLabel = "ورقة الـ InBody",
             primaryModel = inBodyPrimary,
             fallbackModel = inBodyFallback,
+            highDetailJpeg = true,
             onProgress = onProgress
         )
         val json = JSONObject(rawText)
 
-        fun optD(k: String): Double? =
-            if (json.has(k) && !json.isNull(k)) json.optDouble(k, Double.NaN).takeIf { !it.isNaN() } else null
+        fun optD(vararg keys: String): Double? {
+            for (k in keys) {
+                if (json.has(k) && !json.isNull(k)) {
+                    val v = json.optDouble(k, Double.NaN)
+                    if (!v.isNaN()) return v
+                }
+            }
+            return null
+        }
 
-        val segKeys = listOf("la", "ra", "tr", "ll", "rl")
-        fun readSeg(objKey: String): Map<String, Double> {
-            val obj = json.optJSONObject(objKey) ?: return emptyMap()
-            return segKeys.mapNotNull { k ->
-                if (obj.has(k) && !obj.isNull(k)) {
-                    obj.optDouble(k, Double.NaN).takeIf { !it.isNaN() }?.let { k to it }
-                } else null
+        val segMap = listOf(
+            "la" to listOf("left_arm", "la"),
+            "ra" to listOf("right_arm", "ra"),
+            "tr" to listOf("trunk", "tr"),
+            "ll" to listOf("left_leg", "ll"),
+            "rl" to listOf("right_leg", "rl")
+        )
+        fun readSeg(vararg objKeys: String): Map<String, Double> {
+            val obj = objKeys.firstNotNullOfOrNull { json.optJSONObject(it) } ?: return emptyMap()
+            return segMap.mapNotNull { (shortKey, aliases) ->
+                val v = aliases.firstNotNullOfOrNull { a ->
+                    if (obj.has(a) && !obj.isNull(a)) obj.optDouble(a, Double.NaN).takeIf { !it.isNaN() } else null
+                }
+                v?.let { shortKey to it }
             }.toMap()
         }
 
         val ranges = mutableMapOf<String, List<Double>>()
-        val rangesArr = json.optJSONArray("ranges")
+        val rangesArr = json.optJSONArray("normal_ranges") ?: json.optJSONArray("ranges")
         if (rangesArr != null) {
             for (i in 0 until rangesArr.length()) {
                 val item = rangesArr.optJSONObject(i) ?: continue
-                val rk = item.optString("k", "").trim()
-                val lo = item.optDouble("lo", Double.NaN)
-                val hi = item.optDouble("hi", Double.NaN)
+                val rk = item.optString("metric_key", item.optString("k", "")).trim()
+                val lo = item.optDouble("low", item.optDouble("lo", Double.NaN))
+                val hi = item.optDouble("high", item.optDouble("hi", Double.NaN))
                 if (rk.isNotBlank() && !lo.isNaN() && !hi.isNaN()) {
                     ranges[rk] = listOf(lo, hi)
                 }
             }
         }
 
-        val rawDate = json.optString("date", "")
+        val rawDate = (if (json.isNull("test_date")) "" else json.optString("test_date", ""))
+            .ifBlank { if (json.isNull("date")) "" else json.optString("date", "") }
             .replace('.', '-')
             .replace('/', '-')
             .replace(Regex("\\s.*$"), "")
@@ -267,27 +312,27 @@ class GeminiAiRepository {
 
         BodyRecord(
             date = parsedDate,
-            weightKg = optD("w"),
-            smmKg = optD("smm"),
-            pbfPercent = optD("pbf"),
-            bfmKg = optD("bfm"),
-            ffmKg = optD("ffm"),
-            tbwL = optD("tbw"),
-            proteinKg = optD("pro"),
-            mineralsKg = optD("min"),
-            bmrKcal = optD("bmr"),
-            vfl = optD("vfl"),
-            whr = optD("whr"),
-            score = optD("score"),
-            targetWeightKg = optD("tgt"),
-            fatControlKg = optD("fc"),
-            muscleControlKg = optD("mc"),
+            weightKg = optD("weight_kg", "w"),
+            smmKg = optD("skeletal_muscle_mass_kg", "smm"),
+            pbfPercent = optD("percent_body_fat", "pbf"),
+            bfmKg = optD("body_fat_mass_kg", "bfm"),
+            ffmKg = optD("fat_free_mass_kg", "ffm"),
+            tbwL = optD("total_body_water_l", "tbw"),
+            proteinKg = optD("protein_kg", "pro"),
+            mineralsKg = optD("minerals_kg", "min"),
+            bmrKcal = optD("bmr_kcal", "bmr"),
+            vfl = optD("visceral_fat_level", "vfl"),
+            whr = optD("waist_hip_ratio", "whr"),
+            score = optD("inbody_score", "score"),
+            targetWeightKg = optD("target_weight_kg", "tgt"),
+            fatControlKg = optD("fat_control_kg", "fc"),
+            muscleControlKg = optD("muscle_control_kg", "mc"),
             bmi = optD("bmi"),
-            obesityDegree = optD("obd"),
-            heightCm = optD("h"),
-            segmentalLeanKg = readSeg("sl_kg"),
-            segmentalLeanPercent = readSeg("sl_pct"),
-            segmentalFatKg = readSeg("sf_kg"),
+            obesityDegree = optD("obesity_degree_percent", "obd"),
+            heightCm = optD("height_cm", "h"),
+            segmentalLeanKg = readSeg("segmental_lean_kg", "sl_kg"),
+            segmentalLeanPercent = readSeg("segmental_lean_percent", "sl_pct"),
+            segmentalFatKg = readSeg("segmental_fat_kg", "sf_kg"),
             ranges = ranges
         )
     }
@@ -297,7 +342,7 @@ class GeminiAiRepository {
         onProgress: (String) -> Unit = {}
     ): Result<AiLabelResult> = runAiCall {
         val prompt = """
-            Read this Nutrition Facts or Supplement Facts label accurately.
+            Read EVERY line of this Nutrition Facts or Supplement Facts label accurately.
             - If FOOD or POWDER with weights in grams: put values per 100g (or 100ml) in nutrients array; convert per-serving values to per 100g using serving_g; set is_supplement=false.
             - If DIETARY SUPPLEMENT (multivitamin, vitamin, mineral, omega-3, tablet, capsule, softgel): set is_supplement=true, serving_g=100, serving_unit in Arabic ("قرص", "كبسولة", or "سكوب"), and put exact amounts FOR 1 TABLET/CAPSULE directly in nutrients.
             - Convert IU: Vitamin D (1000 IU = 25 mcg), Vitamin A (1 IU = 0.3 mcg), Vitamin E (1 IU = 0.67-1 mg).
@@ -305,7 +350,7 @@ class GeminiAiRepository {
             Required units: kcal; GRAMS for p, f, c, fib, sug, sat, mono, poly, o3;
             MG for chol, na, k, ca, fe, mg, ph, zn, cu, mn, vC, b1, b2, b3, b6, b5, vE;
             MCG for se, vA, fol, b12, vD, vK.
-            Only include nutrients printed on the label; never guess unprinted values.
+            Extract ALL nutrients printed on the label; never guess unprinted values.
         """.trimIndent()
 
         val rawText = executeMultimodalJson(
@@ -314,6 +359,7 @@ class GeminiAiRepository {
             taskLabel = "الملصق الغذائي",
             primaryModel = labelPrimary,
             fallbackModel = labelFallback,
+            highDetailJpeg = true,
             onProgress = onProgress
         )
         parseLabelJson(rawText)
@@ -392,6 +438,7 @@ class GeminiAiRepository {
             taskLabel = "صورة الوجبة",
             primaryModel = foodsPrimary,
             fallbackModel = foodsFallback,
+            highDetailJpeg = false,
             onProgress = onProgress
         )
         parseDetectedFoods(rawText)
@@ -422,13 +469,14 @@ class GeminiAiRepository {
         bitmap: Bitmap,
         onProgress: (String) -> Unit = {}
     ): Result<String?> = runAiCall {
-        val prompt = "Read the exact numeric barcode digits printed under the barcode bars in this image. Do not guess if unreadable; omit digits."
+        val prompt = "Read the exact numeric barcode digits printed under the barcode bars in this image. Do not guess if unreadable; return null."
         val rawText = executeMultimodalJson(
             bitmap = bitmap,
             prompt = prompt,
             taskLabel = "رقم الباركود",
             primaryModel = barcodePrimary,
             fallbackModel = barcodeFallback,
+            highDetailJpeg = true,
             onProgress = onProgress
         )
         val json = JSONObject(rawText)
@@ -442,11 +490,12 @@ class GeminiAiRepository {
         taskLabel: String,
         primaryModel: GenerativeModel,
         fallbackModel: GenerativeModel,
+        highDetailJpeg: Boolean,
         onProgress: (String) -> Unit
     ): String {
-        onProgress("1/3 تجهيز الصورة...")
+        onProgress("1/3 تجهيز الصورة بدقة عالية...")
         val jpegBytes = withContext(Dispatchers.IO) {
-            compressBitmapToJpeg(bitmap)
+            compressBitmapToJpeg(bitmap, highDetail = highDetailJpeg)
         }
         val imageKb = (jpegBytes.size / 1024).coerceAtLeast(1)
         val requestContent = content {
@@ -492,27 +541,23 @@ class GeminiAiRepository {
         val stepPrefix = if (imageKb != null) "2/3" else "1/2"
         val finalPrefix = if (imageKb != null) "3/3" else "2/2"
 
-        // Phase 1: Explicitly acquire App Check token on Main dispatcher (non-blocking await)
-        // so we can distinguish reCAPTCHA/App Check hangs from Gemini inference latency.
         onProgress("$stepPrefix التحقق الأمني (App Check)...")
         val appCheckMs = ensureAppCheckToken()
 
-        // Phase 2: Stream from primary model (gemini-3.8-flash with LOW thinking)
         val sizeSuffix = if (imageKb != null) " (${imageKb} KB)" else ""
-        onProgress("$finalPrefix جاري تحليل $taskLabel بـ Gemini$sizeSuffix...")
+        onProgress("$finalPrefix جاري قراءة $taskLabel بـ Gemini$sizeSuffix...")
 
         val primaryAttempt = streamJsonAttempt(
             model = primaryModel,
             modelName = PRIMARY_MODEL_NAME,
             requestContent = requestContent,
             timeoutMs = PRIMARY_TIMEOUT_MS,
-            onFirstChunk = { onProgress("$finalPrefix جاري استلام النتيجة من Gemini...") }
+            onFirstChunk = { onProgress("$finalPrefix جاري استلام البيانات من Gemini...") }
         )
         if (primaryAttempt.text != null) {
             return primaryAttempt.text
         }
 
-        // If the primary error is clearly an App Check / 403 / quota rejection, don't waste time retrying.
         val primaryErrLower = primaryAttempt.errorChain.lowercase()
         val isAuthOrQuotaError = primaryErrLower.contains("403") ||
             primaryErrLower.contains("appcheck") ||
@@ -534,14 +579,13 @@ class GeminiAiRepository {
             )
         }
 
-        // Phase 3: Automatic fast fallback to gemini-3.5-flash-lite
         onProgress("$finalPrefix جاري المحاولة بنموذج Gemini السريع (flash-lite)...")
         val fallbackAttempt = streamJsonAttempt(
             model = fallbackModel,
             modelName = FALLBACK_MODEL_NAME,
             requestContent = requestContent,
             timeoutMs = FALLBACK_TIMEOUT_MS,
-            onFirstChunk = { onProgress("$finalPrefix جاري استلام النتيجة من Gemini السريع...") }
+            onFirstChunk = { onProgress("$finalPrefix جاري استلام البيانات من Gemini السريع...") }
         )
         if (fallbackAttempt.text != null) {
             return fallbackAttempt.text
@@ -666,13 +710,15 @@ class GeminiAiRepository {
         }
     }
 
-    private fun compressBitmapToJpeg(bitmap: Bitmap): ByteArray {
+    private fun compressBitmapToJpeg(bitmap: Bitmap, highDetail: Boolean): ByteArray {
         val out = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
+        val initialQuality = if (highDetail) 90 else 80
+        val maxBytes = if (highDetail) 1_500 * 1024 else 550 * 1024
+        bitmap.compress(Bitmap.CompressFormat.JPEG, initialQuality, out)
         var bytes = out.toByteArray()
-        if (bytes.size > 450 * 1024) {
+        if (bytes.size > maxBytes) {
             out.reset()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 65, out)
+            bitmap.compress(Bitmap.CompressFormat.JPEG, if (highDetail) 80 else 68, out)
             bytes = out.toByteArray()
         }
         return bytes

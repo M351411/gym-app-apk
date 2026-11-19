@@ -900,6 +900,15 @@ class MainViewModel(
                     put("h", rec.heightCm)
 
                     val sl = rec.segmentalLeanKg.mapValues { (_, v) -> v.toString() }
+                    val totalFilled = f.size + sl.size
+                    val statusMsg = when {
+                        totalFilled == 0 ->
+                            "لم يتمكن Gemini من قراءة أرقام واضحة من الصورة. صوّر الورقة بشكل عمودي وواضح في إضاءة جيدة وجرّب تاني."
+                        totalFilled < 5 ->
+                            "قرأ Gemini $totalFilled خانات فقط — يبدو أن جزءًا من الورقة غير واضح أو مقطوع. راجع الأرقام أو جرّب صورة أوضح."
+                        else ->
+                            "تم الملء التلقائي لـ $totalFilled خانة بواسطة Gemini ✅ راجع الأرقام قبل الحفظ."
+                    }
                     _bodyDraft.value = BodyDraftState(
                         date = rec.date.ifBlank { todayIso() },
                         fields = f,
@@ -908,7 +917,7 @@ class MainViewModel(
                         segmentalFatKg = rec.segmentalFatKg,
                         ranges = rec.ranges,
                         aiBusy = false,
-                        aiStatusMessage = "تم الملء التلقائي بواسطة Gemini ✅ راجع الأرقام قبل الحفظ."
+                        aiStatusMessage = statusMsg
                     )
                 },
                 onFailure = { e ->

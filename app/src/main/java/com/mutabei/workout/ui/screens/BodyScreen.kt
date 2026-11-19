@@ -94,8 +94,11 @@ private val ADVANCED_BODY_FIELDS = listOf(
     "pro" to "البروتين (كجم)",
     "min" to "المعادن (كجم)",
     "whr" to "نسبة الخصر للورك WHR",
+    "bmi" to "مؤشر الكتلة BMI",
+    "h" to "الطول (سم)",
     "tgt" to "الوزن المستهدف (كجم)",
-    "fc" to "تعديل الدهون (كجم)"
+    "fc" to "تعديل الدهون (كجم)",
+    "mc" to "تعديل العضل (كجم)"
 )
 
 private val SEGMENT_FIELDS = listOf(
@@ -301,8 +304,15 @@ fun BodyScreen(
                         }
 
                         // Expandable advanced fields
+                        val advFilledCount = ADVANCED_BODY_FIELDS.count { (k, _) ->
+                            !bodyDraft.fields[k].isNullOrBlank()
+                        }
                         ExpandableSectionCard(
-                            title = "خانات متقدمة (FFM، بروتين، معادن، WHR)",
+                            title = if (advFilledCount > 0) {
+                                "خانات متقدمة ($advFilledCount/${ADVANCED_BODY_FIELDS.size} ممتلئة)"
+                            } else {
+                                "خانات متقدمة (FFM، بروتين، معادن، WHR)"
+                            },
                             testTag = "body_advanced_section"
                         ) {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -330,8 +340,15 @@ fun BodyScreen(
                         }
 
                         // Expandable segmental lean fields
+                        val segFilledCount = SEGMENT_FIELDS.count { (k, _) ->
+                            !bodyDraft.segmentalLeanKg[k].isNullOrBlank()
+                        }
                         ExpandableSectionCard(
-                            title = "توزيع العضل على الأطراف (Segmental Lean)",
+                            title = if (segFilledCount > 0) {
+                                "توزيع العضل على الأطراف ($segFilledCount/${SEGMENT_FIELDS.size} ممتلئة)"
+                            } else {
+                                "توزيع العضل على الأطراف (Segmental Lean)"
+                            },
                             testTag = "body_segmental_section"
                         ) {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

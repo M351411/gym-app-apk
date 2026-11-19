@@ -47,7 +47,7 @@ fun rememberImageCaptureController(
 
     fun decodeAndEmit(uri: Uri) {
         scope.launch {
-            val bitmap = decodeScaledBitmap(context, uri, maxDim = 1024)
+            val bitmap = decodeScaledBitmap(context, uri, maxDim = 2048)
             if (bitmap != null) {
                 onBitmapCaptured(bitmap)
             } else {
@@ -125,7 +125,7 @@ fun rememberImageCaptureController(
 suspend fun decodeScaledBitmap(
     context: Context,
     uri: Uri,
-    maxDim: Int = 1280
+    maxDim: Int = 2048
 ): Bitmap? = withContext(Dispatchers.IO) {
     try {
         val rawBitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
