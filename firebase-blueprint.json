@@ -1,0 +1,147 @@
+{
+  "entities": {
+    "UserConfig": {
+      "title": "User Configuration & Nutrition Profile",
+      "description": "User workout split, exercise alternatives, rest timer default, theme mode, custom portions, and nutrition goal parameters.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "startDate": { "type": "string", "description": "Program start date (YYYY-MM-DD) for 12-week tracker." },
+        "restSeconds": { "type": "integer", "description": "Default rest timer duration in seconds." },
+        "themeMode": { "type": "string", "enum": ["system", "light", "dark"], "description": "UI theme preference." },
+        "selectedBodyMetric": { "type": "string", "description": "Selected metric key for Body trend chart." },
+        "sex": { "type": "string", "enum": ["m", "f"], "description": "Biological sex for BMR and RDA calculations." },
+        "age": { "type": "integer", "description": "Age in years." },
+        "heightCm": { "type": "number", "description": "Height in centimeters." },
+        "weightOverride": { "type": "number", "description": "Manual weight override in kg (0 means use latest InBody)." },
+        "bodyFatOverride": { "type": "number", "description": "Manual body fat % override (0 means use latest InBody)." },
+        "activityFactor": { "type": "number", "description": "Activity multiplier (1.375, 1.55, 1.725)." },
+        "goal": { "type": "string", "enum": ["bulk", "cut", "keep"], "description": "Nutrition goal." },
+        "targetBodyFat": { "type": "number", "description": "Target body fat % for fat-loss estimator." },
+        "kcalOverride": { "type": "integer", "description": "Manual calorie target override (0 means auto)." },
+        "proteinOverride": { "type": "integer", "description": "Manual protein target override in g (0 means auto)." },
+        "carbsOverride": { "type": "integer", "description": "Manual carbs target override in g (0 means auto)." },
+        "fatOverride": { "type": "integer", "description": "Manual fat target override in g (0 means auto)." },
+        "alternatives": { "type": "object", "description": "Map of dayIdx|exIdx to chosen exercise name." },
+        "customPortions": { "type": "object", "description": "Map of src|foodName to list of {name, grams} portions." },
+        "splitDays": { "type": "array", "description": "Workout split days with exercises." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp written with FieldValue.serverTimestamp()." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp written with FieldValue.serverTimestamp()." }
+      },
+      "required": [
+        "userId", "startDate", "restSeconds", "themeMode", "selectedBodyMetric",
+        "sex", "age", "heightCm", "weightOverride", "bodyFatOverride",
+        "activityFactor", "goal", "targetBodyFat", "kcalOverride",
+        "proteinOverride", "carbsOverride", "fatOverride", "alternatives",
+        "customPortions", "splitDays", "createdAt", "updatedAt"
+      ]
+    },
+    "WorkoutSession": {
+      "title": "Workout Session",
+      "description": "Logged workout session for a specific date and split day.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "date": { "type": "string", "description": "Session date YYYY-MM-DD." },
+        "dayIndex": { "type": "integer", "description": "Index into splitDays." },
+        "note": { "type": "string", "description": "Session note." },
+        "exercises": { "type": "object", "description": "Map of exercise index string to logged exercise name and sets." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp." }
+      },
+      "required": ["userId", "date", "dayIndex", "note", "exercises", "createdAt", "updatedAt"]
+    },
+    "NutritionDay": {
+      "title": "Daily Nutrition Log",
+      "description": "Logged food items and water intake for a calendar day.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "date": { "type": "string", "description": "Calendar date YYYY-MM-DD." },
+        "waterMl": { "type": "integer", "description": "Water intake in milliliters." },
+        "items": { "type": "array", "description": "Logged food entries with grams, mealIndex, and 33-nutrient vector." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp." }
+      },
+      "required": ["userId", "date", "waterMl", "items", "createdAt", "updatedAt"]
+    },
+    "BodyRecord": {
+      "title": "InBody & Body Composition Measurement",
+      "description": "Body composition record captured manually or via Gemini InBody sheet scan.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "date": { "type": "string", "description": "Measurement date YYYY-MM-DD." },
+        "weightKg": { "type": "number" },
+        "smmKg": { "type": "number" },
+        "pbfPercent": { "type": "number" },
+        "bfmKg": { "type": "number" },
+        "ffmKg": { "type": "number" },
+        "tbwL": { "type": "number" },
+        "proteinKg": { "type": "number" },
+        "mineralsKg": { "type": "number" },
+        "bmrKcal": { "type": "number" },
+        "vfl": { "type": "number" },
+        "whr": { "type": "number" },
+        "score": { "type": "number" },
+        "targetWeightKg": { "type": "number" },
+        "fatControlKg": { "type": "number" },
+        "muscleControlKg": { "type": "number" },
+        "bmi": { "type": "number" },
+        "obesityDegree": { "type": "number" },
+        "heightCm": { "type": "number" },
+        "segmentalLeanKg": { "type": "object" },
+        "segmentalLeanPercent": { "type": "object" },
+        "segmentalFatKg": { "type": "object" },
+        "ranges": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp." }
+      },
+      "required": ["userId", "date", "createdAt", "updatedAt"]
+    },
+    "CustomFood": {
+      "title": "Custom Food, Scanned Label, Recipe, or Favorite",
+      "description": "User-saved food item, scanned nutrition label, recipe, or favorite food reference.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "name": { "type": "string", "description": "Food display name." },
+        "source": { "type": "string", "enum": ["c", "l", "a", "e", "u", "s"] },
+        "barcode": { "type": "string" },
+        "refusePercent": { "type": "number" },
+        "favorite": { "type": "boolean" },
+        "custom": { "type": "boolean" },
+        "nutrients": { "type": "array", "description": "33-element nutrient vector per 100g (-1 means missing)." },
+        "portions": { "type": "array", "description": "Portion presets [{name, grams}]." },
+        "recipeServings": { "type": "integer" },
+        "recipeCookedWeight": { "type": "number" },
+        "recipeIngredients": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp." }
+      },
+      "required": ["userId", "name", "source", "barcode", "refusePercent", "favorite", "custom", "nutrients", "portions", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserConfig" },
+      "description": "Private user configuration, workout split, alternatives, custom portions, and nutrition goals."
+    },
+    "/users/{userId}/workoutSessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/WorkoutSession" },
+      "description": "Private workout sessions logged by the user."
+    },
+    "/users/{userId}/nutritionDays/{dateId}": {
+      "schema": { "$ref": "#/entities/NutritionDay" },
+      "description": "Private daily nutrition logs and water tracking."
+    },
+    "/users/{userId}/bodyRecords/{recordId}": {
+      "schema": { "$ref": "#/entities/BodyRecord" },
+      "description": "Private InBody and body composition measurements."
+    },
+    "/users/{userId}/customFoods/{foodId}": {
+      "schema": { "$ref": "#/entities/CustomFood" },
+      "description": "Private custom foods, scanned labels, recipes, and favorites."
+    }
+  }
+}

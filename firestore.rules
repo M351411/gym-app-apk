@@ -1,0 +1,277 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net: default deny everything
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidTimestamp(ts) {
+      return ts is timestamp && ts <= request.time;
+    }
+
+    function isOptNum(data, key, lo, hi) {
+      return !(key in data) || (data[key] is number && data[key] >= lo && data[key] <= hi);
+    }
+
+    function isOptMap(data, key, maxSz) {
+      return !(key in data) || (data[key] is map && data[key].size() <= maxSz);
+    }
+
+    function isValidUserConfig(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.startDate is string && data.startDate.size() >= 8 && data.startDate.size() <= 20 &&
+             data.restSeconds is int && data.restSeconds >= 30 && data.restSeconds <= 900 &&
+             data.themeMode in ['system', 'light', 'dark'] &&
+             data.selectedBodyMetric is string && data.selectedBodyMetric.size() >= 1 && data.selectedBodyMetric.size() <= 10 &&
+             data.sex in ['m', 'f'] &&
+             data.age is int && data.age >= 10 && data.age <= 120 &&
+             data.heightCm is number && data.heightCm >= 100 && data.heightCm <= 250 &&
+             data.weightOverride is number && data.weightOverride >= 0 && data.weightOverride <= 350 &&
+             data.bodyFatOverride is number && data.bodyFatOverride >= 0 && data.bodyFatOverride <= 70 &&
+             data.activityFactor is number && data.activityFactor >= 1.1 && data.activityFactor <= 2.5 &&
+             data.goal in ['bulk', 'cut', 'keep'] &&
+             data.targetBodyFat is number && data.targetBodyFat >= 3 && data.targetBodyFat <= 50 &&
+             data.kcalOverride is int && data.kcalOverride >= 0 && data.kcalOverride <= 10000 &&
+             data.proteinOverride is int && data.proteinOverride >= 0 && data.proteinOverride <= 1000 &&
+             data.carbsOverride is int && data.carbsOverride >= 0 && data.carbsOverride <= 2000 &&
+             data.fatOverride is int && data.fatOverride >= 0 && data.fatOverride <= 500 &&
+             data.alternatives is map && data.alternatives.size() <= 200 &&
+             data.customPortions is map && data.customPortions.size() <= 200 &&
+             data.splitDays is list && data.splitDays.size() <= 14 &&
+             (data.splitDays.size() == 0 || data.splitDays[0] is map) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidWorkoutSession(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.date is string && data.date.size() >= 8 && data.date.size() <= 16 &&
+             data.dayIndex is int && data.dayIndex >= 0 && data.dayIndex <= 13 &&
+             data.note is string && data.note.size() <= 2000 &&
+             data.exercises is map && data.exercises.size() <= 40 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidNutritionDay(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.date is string && data.date.size() >= 8 && data.date.size() <= 16 &&
+             data.waterMl is int && data.waterMl >= 0 && data.waterMl <= 20000 &&
+             data.items is list && data.items.size() <= 100 &&
+             (data.items.size() == 0 || data.items[0] is map) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidBodyRecord(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.date is string && data.date.size() >= 8 && data.date.size() <= 16 &&
+             isOptNum(data, 'weightKg', 20, 350) &&
+             isOptNum(data, 'smmKg', 5, 150) &&
+             isOptNum(data, 'pbfPercent', 2, 75) &&
+             isOptNum(data, 'bfmKg', 1, 250) &&
+             isOptNum(data, 'ffmKg', 15, 200) &&
+             isOptNum(data, 'tbwL', 10, 150) &&
+             isOptNum(data, 'proteinKg', 2, 50) &&
+             isOptNum(data, 'mineralsKg', 0.5, 20) &&
+             isOptNum(data, 'bmrKcal', 500, 6000) &&
+             isOptNum(data, 'vfl', 0, 50) &&
+             isOptNum(data, 'whr', 0.4, 2.0) &&
+             isOptNum(data, 'score', 0, 120) &&
+             isOptNum(data, 'targetWeightKg', 20, 300) &&
+             isOptNum(data, 'fatControlKg', -200, 200) &&
+             isOptNum(data, 'muscleControlKg', -100, 100) &&
+             isOptNum(data, 'bmi', 10, 80) &&
+             isOptNum(data, 'obesityDegree', 40, 400) &&
+             isOptNum(data, 'heightCm', 100, 250) &&
+             isOptMap(data, 'segmentalLeanKg', 10) &&
+             isOptMap(data, 'segmentalLeanPercent', 10) &&
+             isOptMap(data, 'segmentalFatKg', 10) &&
+             isOptMap(data, 'ranges', 20) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    function isValidCustomFood(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 200 &&
+             data.source in ['c', 'l', 'a', 'e', 'u', 's'] &&
+             data.barcode is string && data.barcode.size() <= 64 &&
+             data.refusePercent is number && data.refusePercent >= 0 && data.refusePercent <= 100 &&
+             data.favorite is bool &&
+             data.custom is bool &&
+             data.nutrients is list && data.nutrients.size() == 33 && data.nutrients[0] is number &&
+             data.portions is list && data.portions.size() <= 30 &&
+             (data.portions.size() == 0 || data.portions[0] is map) &&
+             (!('recipeServings' in data) || (data.recipeServings is int && data.recipeServings >= 1 && data.recipeServings <= 200)) &&
+             (!('recipeCookedWeight' in data) || (data.recipeCookedWeight is number && data.recipeCookedWeight >= 0 && data.recipeCookedWeight <= 100000)) &&
+             (!('recipeIngredients' in data) || (data.recipeIngredients is list && data.recipeIngredients.size() <= 50 && (data.recipeIngredients.size() == 0 || data.recipeIngredients[0] is map))) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll([
+                         'userId', 'startDate', 'restSeconds', 'themeMode', 'selectedBodyMetric',
+                         'sex', 'age', 'heightCm', 'weightOverride', 'bodyFatOverride',
+                         'activityFactor', 'goal', 'targetBodyFat', 'kcalOverride',
+                         'proteinOverride', 'carbsOverride', 'fatOverride', 'alternatives',
+                         'customPortions', 'splitDays', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'startDate', 'restSeconds', 'themeMode', 'selectedBodyMetric',
+                         'sex', 'age', 'heightCm', 'weightOverride', 'bodyFatOverride',
+                         'activityFactor', 'goal', 'targetBodyFat', 'kcalOverride',
+                         'proteinOverride', 'carbsOverride', 'fatOverride', 'alternatives',
+                         'customPortions', 'splitDays', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidUserConfig(incoming(), userId);
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidUserConfig(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'startDate', 'restSeconds', 'themeMode', 'selectedBodyMetric',
+                         'sex', 'age', 'heightCm', 'weightOverride', 'bodyFatOverride',
+                         'activityFactor', 'goal', 'targetBodyFat', 'kcalOverride',
+                         'proteinOverride', 'carbsOverride', 'fatOverride', 'alternatives',
+                         'customPortions', 'splitDays', 'updatedAt'
+                       ]);
+
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      match /workoutSessions/{sessionId} {
+        allow get: if isOwner(userId) && isValidId(sessionId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(sessionId) &&
+                         incoming().keys().hasAll(['userId', 'date', 'dayIndex', 'note', 'exercises', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'date', 'dayIndex', 'note', 'exercises', 'createdAt', 'updatedAt']) &&
+                         isValidWorkoutSession(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(sessionId) &&
+                         isValidWorkoutSession(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['date', 'dayIndex', 'note', 'exercises', 'updatedAt']);
+
+        allow delete: if isOwner(userId) && isValidId(sessionId);
+      }
+
+      match /nutritionDays/{dateId} {
+        allow get: if isOwner(userId) && isValidId(dateId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(dateId) &&
+                         incoming().keys().hasAll(['userId', 'date', 'waterMl', 'items', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['userId', 'date', 'waterMl', 'items', 'createdAt', 'updatedAt']) &&
+                         isValidNutritionDay(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(dateId) &&
+                         isValidNutritionDay(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['date', 'waterMl', 'items', 'updatedAt']);
+
+        allow delete: if isOwner(userId) && isValidId(dateId);
+      }
+
+      match /bodyRecords/{recordId} {
+        allow get: if isOwner(userId) && isValidId(recordId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(recordId) &&
+                         incoming().keys().hasAll(['userId', 'date', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'date', 'weightKg', 'smmKg', 'pbfPercent', 'bfmKg', 'ffmKg',
+                           'tbwL', 'proteinKg', 'mineralsKg', 'bmrKcal', 'vfl', 'whr', 'score',
+                           'targetWeightKg', 'fatControlKg', 'muscleControlKg', 'bmi', 'obesityDegree',
+                           'heightCm', 'segmentalLeanKg', 'segmentalLeanPercent', 'segmentalFatKg',
+                           'ranges', 'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidBodyRecord(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(recordId) &&
+                         isValidBodyRecord(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'date', 'weightKg', 'smmKg', 'pbfPercent', 'bfmKg', 'ffmKg',
+                           'tbwL', 'proteinKg', 'mineralsKg', 'bmrKcal', 'vfl', 'whr', 'score',
+                           'targetWeightKg', 'fatControlKg', 'muscleControlKg', 'bmi', 'obesityDegree',
+                           'heightCm', 'segmentalLeanKg', 'segmentalLeanPercent', 'segmentalFatKg',
+                           'ranges', 'updatedAt'
+                         ]);
+
+        allow delete: if isOwner(userId) && isValidId(recordId);
+      }
+
+      match /customFoods/{foodId} {
+        allow get: if isOwner(userId) && isValidId(foodId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(foodId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'name', 'source', 'barcode', 'refusePercent',
+                           'favorite', 'custom', 'nutrients', 'portions', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'name', 'source', 'barcode', 'refusePercent',
+                           'favorite', 'custom', 'nutrients', 'portions',
+                           'recipeServings', 'recipeCookedWeight', 'recipeIngredients',
+                           'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidCustomFood(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(foodId) &&
+                         isValidCustomFood(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'name', 'source', 'barcode', 'refusePercent',
+                           'favorite', 'custom', 'nutrients', 'portions',
+                           'recipeServings', 'recipeCookedWeight', 'recipeIngredients',
+                           'updatedAt'
+                         ]);
+
+        allow delete: if isOwner(userId) && isValidId(foodId);
+      }
+    }
+  }
+}

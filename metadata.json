@@ -1,0 +1,8 @@
+{
+  "name": "متابع التمرين والتغذية",
+  "description": "تطبيق أندرويد لمتابعة التمارين وجدول البالغامدي، تتبع التغذية والسعرات والمغذيات الدقيقة، وقياسات الإن بودي مع تحليل ذكي بالكاميرا والملء التلقائي عبر Gemini.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

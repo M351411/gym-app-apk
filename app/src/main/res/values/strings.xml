@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">متابع التمرين والتغذية</string>
+    <string name="app_header_title">متابع التمرين</string>
+    <string name="nav_workouts">التمرين</string>
+    <string name="nav_nutrition">التغذية</string>
+    <string name="nav_body">الجسم</string>
+    <string name="settings_title">الإعدادات والنسخة الاحتياطية</string>
+    <string name="sign_in_title">متابع التمرين والتغذية</string>
+    <string name="sign_in_subtitle">سجّل دخولك بحساب جوجل لحفظ تمارينك ووجباتك وقياسات الـ InBody سحابيًا، وتفعيل القراءة التلقائية بالكاميرا عبر Gemini.</string>
+    <string name="sign_in_google_button">تسجيل الدخول بحساب Google</string>
+    <string name="sign_out_button">تسجيل الخروج</string>
+    <string name="synced_status">محفوظ في حسابك</string>
+    <string name="offline_banner">مفيش نت حاليًا. كمّل عادي، التغييرات محفوظة محليًا وهتتزامن أول ما النت يرجع.</string>
+    <string name="cd_settings">الإعدادات</string>
+    <string name="cd_rest_timer">مؤقت الراحة</string>
+    <string name="cd_camera">التصوير بالكاميرا</string>
+    <string name="cd_gallery">اختيار صورة من المعرض</string>
+    <string name="cd_youtube">فيديو شرح التمرين</string>
+    <string name="cd_prev_day">اليوم السابق</string>
+    <string name="cd_next_day">اليوم التالي</string>
+    <string name="cd_close">إغلاق</string>
+    <string name="cd_favorite">المفضلة</string>
+    <string name="cd_delete">حذف</string>
+    <string name="cd_back">رجوع</string>
+    <string name="camera_permission_denied">محتاجين صلاحية الكاميرا عشان نصوّر. تقدر تفعلها أو تختار صورة من المعرض.</string>
+</resources>
