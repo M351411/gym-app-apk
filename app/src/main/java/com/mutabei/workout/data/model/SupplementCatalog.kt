@@ -85,8 +85,9 @@ object SupplementCatalog {
                 "kcal" to 9.0,
                 "f" to 1.0,
                 "poly" to 0.7,
-                "o3" to 0.7, // 700 mg per capsule -> 1.4 g (1400 mg) per 2 capsules
-                "vD" to 5.0  // 5 mcg (200 IU) per capsule -> 10 mcg (400 IU) per 2 capsules
+                "o3" to 0.7,  // 700 mg per capsule -> 1.4 g (1400 mg) per 2 capsules
+                "epa" to 0.7, // Combined EPA+DHA per capsule
+                "vD" to 5.0   // 5 mcg (200 IU) per capsule -> 10 mcg (400 IU) per 2 capsules
             )
         ),
 
@@ -130,7 +131,9 @@ object SupplementCatalog {
                 "fe" to 8.0,
                 "se" to 100.0,
                 "cu" to 0.9,
-                "mn" to 2.3
+                "mn" to 2.3,
+                "io" to 150.0,
+                "cr" to 35.0
             )
         ),
 
@@ -207,6 +210,7 @@ object SupplementCatalog {
                 mapOf(
                     "kcal" to 390.0,
                     "p" to 80.0,
+                    "leu" to 8.5,
                     "c" to 7.0,
                     "f" to 4.0,
                     "ca" to 400.0,
@@ -255,8 +259,8 @@ object SupplementCatalog {
 
     fun activeNutrientsSummary(nutrients: List<Double>, grams: Double = 100.0, maxItems: Int = 4): String {
         val priorityKeys = listOf(
-            "o3", "vC", "vD", "zn", "mg", "vE", "b12", "fol", "b1", "b2", "b3", "b5", "b6",
-            "vA", "vK", "fe", "ca", "cu", "se", "mn", "k", "ph"
+            "o3", "epa", "vC", "vD", "zn", "mg", "vE", "b12", "fol", "b1", "b2", "b3", "b5", "b6",
+            "vA", "vK", "fe", "ca", "cu", "se", "mn", "io", "cr", "leu", "caf", "k", "ph"
         )
         val parts = mutableListOf<String>()
         for (k in priorityKeys) {

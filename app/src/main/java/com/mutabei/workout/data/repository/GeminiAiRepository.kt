@@ -35,6 +35,9 @@ private const val APP_CHECK_TIMEOUT_MS = 20_000L
 private const val PRIMARY_TIMEOUT_MS = 45_000L
 private const val FALLBACK_TIMEOUT_MS = 30_000L
 
+private const val FULL_MICRONUTRIENT_INSTRUCTION =
+    "Never return null or skip micronutrients. Always estimate full micronutrient values based on USDA FoodData Central and Egyptian Food Composition Tables for the exact weight provided. Only return 0 if the food genuinely contains zero of that nutrient (e.g., cholesterol in plant foods)."
+
 private class AppCheckStageException(
     val timedOut: Boolean,
     val elapsedMs: Long,
@@ -116,7 +119,7 @@ class GeminiAiRepository {
     private val labelSchema: Schema by lazy {
         val nutrientEntrySchema = Schema.obj(
             properties = mapOf(
-                "k" to Schema.string(description = "Nutrient key from: kcal, p, f, c, fib, sug, sat, mono, poly, o3, chol, na, k, ca, fe, mg, ph, zn, cu, mn, se, vA, vC, vD, vE, vK, b1, b2, b3, b5, b6, fol, b12"),
+                "k" to Schema.string(description = "Nutrient key from: kcal, p, f, c, fib, sug, asug, sat, mono, poly, o3, epa, chol, leu, na, k, ca, fe, mg, ph, zn, cu, mn, se, io, cr, vA, vC, vD, vE, vK, b1, b2, b3, b5, b6, fol, b12, caf, wat"),
                 "v" to Schema.double(description = "Numeric value in required unit")
             )
         )
@@ -136,26 +139,77 @@ class GeminiAiRepository {
     }
 
     private val foodsSchema: Schema by lazy {
-        val fallbackSchema = Schema.obj(
+        val macrosSchema = Schema.obj(
             properties = mapOf(
-                "kcal" to Schema.double(nullable = true),
-                "p" to Schema.double(nullable = true),
-                "f" to Schema.double(nullable = true),
-                "c" to Schema.double(nullable = true),
-                "fib" to Schema.double(nullable = true)
+                "calories_kcal" to Schema.double(),
+                "protein_g" to Schema.double(),
+                "leucine_g" to Schema.double(description = "Essential amino acid for muscle protein synthesis"),
+                "carbs_g" to Schema.double(),
+                "fiber_g" to Schema.double(),
+                "added_sugar_g" to Schema.double(description = "Added sugars only, excluding natural sugars in milk/fruit"),
+                "fat_g" to Schema.double(),
+                "saturated_fat_g" to Schema.double(),
+                "omega_3_total_g" to Schema.double(),
+                "omega_3_epa_dha_g" to Schema.double(description = "Combined EPA and DHA fatty acids"),
+                "cholesterol_mg" to Schema.double(description = "Must return actual mg value, e.g., ~186mg per large egg")
+            )
+        )
+        val vitaminsSchema = Schema.obj(
+            properties = mapOf(
+                "vitamin_a_mcg" to Schema.double(),
+                "vitamin_c_mg" to Schema.double(),
+                "vitamin_d_iu" to Schema.double(description = "Return in International Units (1 mcg = 40 IU)"),
+                "vitamin_e_mg" to Schema.double(),
+                "vitamin_k_mcg" to Schema.double(),
+                "b1_thiamine_mg" to Schema.double(),
+                "b2_riboflavin_mg" to Schema.double(),
+                "b3_niacin_mg" to Schema.double(),
+                "b5_pantothenic_acid_mg" to Schema.double(),
+                "b6_pyridoxine_mg" to Schema.double(),
+                "b9_folate_mcg" to Schema.double(),
+                "b12_cobalamin_mcg" to Schema.double()
+            )
+        )
+        val mineralsSchema = Schema.obj(
+            properties = mapOf(
+                "sodium_mg" to Schema.double(),
+                "potassium_mg" to Schema.double(),
+                "calcium_mg" to Schema.double(),
+                "iron_mg" to Schema.double(),
+                "magnesium_mg" to Schema.double(),
+                "phosphorus_mg" to Schema.double(),
+                "zinc_mg" to Schema.double(),
+                "copper_mg" to Schema.double(),
+                "manganese_mg" to Schema.double(),
+                "selenium_mcg" to Schema.double(),
+                "iodine_mcg" to Schema.double(),
+                "chromium_mcg" to Schema.double()
+            )
+        )
+        val otherSchema = Schema.obj(
+            properties = mapOf(
+                "caffeine_mg" to Schema.double(),
+                "water_g" to Schema.double(description = "Moisture/water content inside the food itself")
             )
         )
         val itemSchema = Schema.obj(
             properties = mapOf(
-                "name_en" to Schema.string(description = "Short generic English food name like 'rice, white, cooked' or 'chicken breast, grilled'"),
-                "name_ar" to Schema.string(description = "Natural Arabic food name"),
-                "grams" to Schema.double(description = "Realistic estimated weight eaten in grams"),
-                "per100" to fallbackSchema
-            )
+                "food_name" to Schema.string(description = "Natural Arabic food name"),
+                "food_name_en" to Schema.string(description = "Short generic English USDA food name for database matching"),
+                "serving_weight_g" to Schema.double(description = "Exact weight provided or realistic estimated weight eaten in grams"),
+                "macros" to macrosSchema,
+                "vitamins" to vitaminsSchema,
+                "minerals" to mineralsSchema,
+                "other" to otherSchema
+            ),
+            optionalProperties = listOf("food_name_en")
         )
         Schema.obj(
             properties = mapOf(
-                "items" to Schema.array(items = itemSchema, description = "Distinct foods identified")
+                "items" to Schema.array(
+                    items = itemSchema,
+                    description = "Distinct foods identified, each with complete macros, vitamins, minerals, and other nutrients for serving_weight_g"
+                )
             )
         )
     }
@@ -172,7 +226,8 @@ class GeminiAiRepository {
         modelName: String,
         schema: Schema,
         temp: Float,
-        thinking: ThinkingLevel?
+        thinking: ThinkingLevel?,
+        systemPrompt: String? = null
     ): GenerativeModel = Firebase.ai.generativeModel(
         modelName = modelName,
         generationConfig = generationConfig {
@@ -184,7 +239,8 @@ class GeminiAiRepository {
                     thinkingLevel = thinking
                 }
             }
-        }
+        },
+        systemInstruction = systemPrompt?.let { content { text(it) } }
     )
 
     // InBody sheets are dense A4 tables + bar graphs: MEDIUM thinking gives much higher OCR completeness.
@@ -194,8 +250,12 @@ class GeminiAiRepository {
     private val labelPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, labelSchema, 0.1f, ThinkingLevel.LOW) }
     private val labelFallback by lazy { buildModel(FALLBACK_MODEL_NAME, labelSchema, 0.1f, thinking = null) }
 
-    private val foodsPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, foodsSchema, 0.2f, ThinkingLevel.LOW) }
-    private val foodsFallback by lazy { buildModel(FALLBACK_MODEL_NAME, foodsSchema, 0.2f, thinking = null) }
+    private val foodsPrimary by lazy {
+        buildModel(PRIMARY_MODEL_NAME, foodsSchema, 0.1f, ThinkingLevel.LOW, systemPrompt = FULL_MICRONUTRIENT_INSTRUCTION)
+    }
+    private val foodsFallback by lazy {
+        buildModel(FALLBACK_MODEL_NAME, foodsSchema, 0.1f, thinking = null, systemPrompt = FULL_MICRONUTRIENT_INSTRUCTION)
+    }
 
     private val barcodePrimary by lazy { buildModel(PRIMARY_MODEL_NAME, barcodeSchema, 0.0f, ThinkingLevel.LOW) }
     private val barcodeFallback by lazy { buildModel(FALLBACK_MODEL_NAME, barcodeSchema, 0.0f, thinking = null) }
@@ -346,10 +406,10 @@ class GeminiAiRepository {
             - If FOOD or POWDER with weights in grams: put values per 100g (or 100ml) in nutrients array; convert per-serving values to per 100g using serving_g; set is_supplement=false.
             - If DIETARY SUPPLEMENT (multivitamin, vitamin, mineral, omega-3, tablet, capsule, softgel): set is_supplement=true, serving_g=100, serving_unit in Arabic ("قرص", "كبسولة", or "سكوب"), and put exact amounts FOR 1 TABLET/CAPSULE directly in nutrients.
             - Convert IU: Vitamin D (1000 IU = 25 mcg), Vitamin A (1 IU = 0.3 mcg), Vitamin E (1 IU = 0.67-1 mg).
-            - For Omega-3 / Fish Oil: total Omega-3 (EPA+DHA) in GRAMS under key "o3" (e.g., 700 mg -> 0.7).
-            Required units: kcal; GRAMS for p, f, c, fib, sug, sat, mono, poly, o3;
-            MG for chol, na, k, ca, fe, mg, ph, zn, cu, mn, vC, b1, b2, b3, b6, b5, vE;
-            MCG for se, vA, fol, b12, vD, vK.
+            - For Omega-3 / Fish Oil: total Omega-3 in GRAMS under key "o3" AND combined EPA+DHA in GRAMS under key "epa" (e.g., 700 mg -> 0.7).
+            Required units: kcal; GRAMS for p, leu, f, c, fib, sug, asug, sat, mono, poly, o3, epa, wat;
+            MG for chol, caf, na, k, ca, fe, mg, ph, zn, cu, mn, vC, b1, b2, b3, b6, b5, vE;
+            MCG for se, io, cr, vA, fol, b12, vD, vK.
             Extract ALL nutrients printed on the label; never guess unprinted values.
         """.trimIndent()
 
@@ -373,9 +433,9 @@ class GeminiAiRepository {
             The user wants to log this dietary supplement / multivitamin / pharmacy product (Egyptian and international pharmacy brands are common): "$supplementQuery".
             Return its standard official active composition PER 1 TABLET / CAPSULE (or per 1 scoop if powder) inside "nutrients" array as {k, v} entries.
             Set is_supplement=true, serving_g=100 (for tablets/capsules) or actual scoop grams (for powders), and serving_unit in Arabic ("قرص", "كبسولة", or "سكوب").
-            Required units: kcal; GRAMS for p, f, c, fib, sug, sat, mono, poly, o3 (total Omega-3 in grams, e.g. 700 mg = 0.7);
-            MG for chol, na, k, ca, fe, mg, ph, zn, cu, mn, vC, b1, b2, b3, b6, b5, vE;
-            MCG for se, vA, fol, b12, vD, vK.
+            Required units: kcal; GRAMS for p, leu, f, c, fib, sug, asug, sat, mono, poly, o3 (total Omega-3 in grams, e.g. 700 mg = 0.7), epa (EPA+DHA in grams);
+            MG for chol, caf, na, k, ca, fe, mg, ph, zn, cu, mn, vC, b1, b2, b3, b6, b5, vE;
+            MCG for se, io, cr, vA, fol, b12, vD, vK.
             Convert IU to mcg/mg (Vitamin D: 1000 IU = 25 mcg; Vitamin A: 1 IU = 0.3 mcg; Vitamin E: 1 IU = 0.67-1 mg).
             Only include nutrients genuinely present in this product.
         """.trimIndent()
@@ -426,9 +486,16 @@ class GeminiAiRepository {
         onProgress: (String) -> Unit = {}
     ): Result<List<AiDetectedFoodRaw>> = runAiCall {
         val prompt = """
-            Identify all foods visible in this meal photo. Egyptian and Middle Eastern dishes are common.
-            List each distinct food item separately (e.g., rice, grilled chicken, salad, baladi bread, sauces).
-            Provide realistic estimated grams eaten and a rough per100 fallback (kcal, p, f, c, fib).
+            Identify every distinct food visible in this meal photo (Egyptian and Middle Eastern dishes are common, e.g., rice, grilled chicken, salad, baladi bread, sauces, eggs, ful, taameya).
+            For each food item, estimate a realistic serving_weight_g in grams and return COMPLETE values for macros, vitamins, minerals, and other nutrients for that exact serving_weight_g.
+            $FULL_MICRONUTRIENT_INSTRUCTION
+            Important accuracy notes:
+            - leucine_g: essential amino acid for muscle protein synthesis (e.g., ~2.5g per 100g cooked chicken breast, ~0.55g per large egg).
+            - added_sugar_g: added sugars only, excluding natural sugars in milk/fruit.
+            - omega_3_epa_dha_g: combined EPA and DHA fatty acids.
+            - cholesterol_mg: must return actual mg value (e.g., ~186mg per large egg; 0 for plant foods).
+            - vitamin_d_iu: return in International Units (1 mcg = 40 IU).
+            - water_g: moisture/water content inside the food itself in grams.
             Be realistic, not optimistic.
         """.trimIndent()
 
@@ -449,9 +516,17 @@ class GeminiAiRepository {
         onProgress: (String) -> Unit = {}
     ): Result<List<AiDetectedFoodRaw>> = runAiCall {
         val prompt = """
-            Identify the foods described here: "$description".
+            Analyze every distinct food item described here: "$description".
             Egyptian and Middle Eastern dishes are common.
-            List each distinct food separately with realistic estimated grams eaten and rough per100 fallback (kcal, p, f, c, fib).
+            Use the exact weight provided by the user (or a realistic serving_weight_g in grams if omitted) and return COMPLETE values for macros, vitamins, minerals, and other nutrients for that exact serving_weight_g.
+            $FULL_MICRONUTRIENT_INSTRUCTION
+            Important accuracy notes:
+            - leucine_g: essential amino acid for muscle protein synthesis.
+            - added_sugar_g: added sugars only, excluding natural sugars in milk/fruit.
+            - omega_3_epa_dha_g: combined EPA and DHA fatty acids.
+            - cholesterol_mg: must return actual mg value (e.g., ~186mg per large egg; 0 for plant foods).
+            - vitamin_d_iu: return in International Units (1 mcg = 40 IU).
+            - water_g: moisture/water content inside the food itself in grams.
             Be realistic, not optimistic.
         """.trimIndent()
 
@@ -730,22 +805,86 @@ class GeminiAiRepository {
         val arr = json.optJSONArray("items") ?: return emptyList()
         val result = mutableListOf<AiDetectedFoodRaw>()
         for (i in 0 until arr.length()) {
-            val o = arr.getJSONObject(i)
-            val per100Obj = o.optJSONObject("per100") ?: JSONObject()
-            fun p(k: String): Double? =
-                if (per100Obj.has(k) && !per100Obj.isNull(k)) per100Obj.optDouble(k, Double.NaN).takeIf { !it.isNaN() } else null
+            val o = arr.optJSONObject(i) ?: continue
+            val grams = o.optDouble("serving_weight_g", o.optDouble("grams", 100.0))
+                .takeIf { !it.isNaN() && it > 0.0 } ?: 100.0
+            val toPer100 = 100.0 / grams
+
+            val macros = o.optJSONObject("macros")
+            val vitamins = o.optJSONObject("vitamins")
+            val minerals = o.optJSONObject("minerals")
+            val other = o.optJSONObject("other")
+
+            fun readPer100(obj: JSONObject?, key: String, scale: Double = 1.0): Double? {
+                if (obj == null || !obj.has(key) || obj.isNull(key)) return null
+                val raw = obj.optDouble(key, Double.NaN)
+                if (raw.isNaN() || raw < 0.0) return null
+                return raw * scale * toPer100
+            }
+
+            val per100Map: Map<String, Double?> = if (macros != null || vitamins != null || minerals != null || other != null) {
+                mapOf(
+                    "kcal" to readPer100(macros, "calories_kcal"),
+                    "p" to readPer100(macros, "protein_g"),
+                    "leu" to readPer100(macros, "leucine_g"),
+                    "c" to readPer100(macros, "carbs_g"),
+                    "fib" to readPer100(macros, "fiber_g"),
+                    "asug" to readPer100(macros, "added_sugar_g"),
+                    "f" to readPer100(macros, "fat_g"),
+                    "sat" to readPer100(macros, "saturated_fat_g"),
+                    "o3" to readPer100(macros, "omega_3_total_g"),
+                    "epa" to readPer100(macros, "omega_3_epa_dha_g"),
+                    "chol" to readPer100(macros, "cholesterol_mg"),
+                    "vA" to readPer100(vitamins, "vitamin_a_mcg"),
+                    "vC" to readPer100(vitamins, "vitamin_c_mg"),
+                    // Schema returns Vitamin D in IU (1 mcg = 40 IU); store internally in mcg for consistency
+                    "vD" to readPer100(vitamins, "vitamin_d_iu", scale = 1.0 / 40.0),
+                    "vE" to readPer100(vitamins, "vitamin_e_mg"),
+                    "vK" to readPer100(vitamins, "vitamin_k_mcg"),
+                    "b1" to readPer100(vitamins, "b1_thiamine_mg"),
+                    "b2" to readPer100(vitamins, "b2_riboflavin_mg"),
+                    "b3" to readPer100(vitamins, "b3_niacin_mg"),
+                    "b5" to readPer100(vitamins, "b5_pantothenic_acid_mg"),
+                    "b6" to readPer100(vitamins, "b6_pyridoxine_mg"),
+                    "fol" to readPer100(vitamins, "b9_folate_mcg"),
+                    "b12" to readPer100(vitamins, "b12_cobalamin_mcg"),
+                    "na" to readPer100(minerals, "sodium_mg"),
+                    "k" to readPer100(minerals, "potassium_mg"),
+                    "ca" to readPer100(minerals, "calcium_mg"),
+                    "fe" to readPer100(minerals, "iron_mg"),
+                    "mg" to readPer100(minerals, "magnesium_mg"),
+                    "ph" to readPer100(minerals, "phosphorus_mg"),
+                    "zn" to readPer100(minerals, "zinc_mg"),
+                    "cu" to readPer100(minerals, "copper_mg"),
+                    "mn" to readPer100(minerals, "manganese_mg"),
+                    "se" to readPer100(minerals, "selenium_mcg"),
+                    "io" to readPer100(minerals, "iodine_mcg"),
+                    "cr" to readPer100(minerals, "chromium_mcg"),
+                    "caf" to readPer100(other, "caffeine_mg"),
+                    "wat" to readPer100(other, "water_g")
+                )
+            } else {
+                val per100Obj = o.optJSONObject("per100") ?: JSONObject()
+                fun p(k: String): Double? =
+                    if (per100Obj.has(k) && !per100Obj.isNull(k)) per100Obj.optDouble(k, Double.NaN).takeIf { !it.isNaN() } else null
+                mapOf(
+                    "kcal" to p("kcal"),
+                    "p" to p("p"),
+                    "f" to p("f"),
+                    "c" to p("c"),
+                    "fib" to p("fib")
+                )
+            }
+
+            val foodName = o.optString("food_name", o.optString("name_ar", "")).trim()
+            val foodNameEn = o.optString("food_name_en", o.optString("name_en", "")).trim()
+
             result.add(
                 AiDetectedFoodRaw(
-                    nameEn = o.optString("name_en", ""),
-                    nameAr = o.optString("name_ar", ""),
-                    grams = o.optDouble("grams", 100.0).takeIf { !it.isNaN() && it > 0 } ?: 100.0,
-                    fallbackPer100 = mapOf(
-                        "kcal" to p("kcal"),
-                        "p" to p("p"),
-                        "f" to p("f"),
-                        "c" to p("c"),
-                        "fib" to p("fib")
-                    )
+                    nameEn = foodNameEn.ifBlank { foodName },
+                    nameAr = foodName.ifBlank { foodNameEn },
+                    grams = grams,
+                    fallbackPer100 = per100Map
                 )
             )
         }

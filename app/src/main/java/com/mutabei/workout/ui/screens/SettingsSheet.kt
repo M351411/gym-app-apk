@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.FileOpen
 import androidx.compose.material.icons.rounded.Logout
 import androidx.compose.material.icons.rounded.SaveAlt
@@ -316,6 +317,25 @@ fun SettingsSheet(
                         }
                     }
 
+                    Button(
+                        onClick = {
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            val clipText = cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+                            if (clipText.isBlank()) {
+                                viewModel.showToast("الحافظة فاضية. انسخ نص النسخة الاحتياطية الأول.")
+                            } else {
+                                viewModel.importBackupJson(clipText)
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("paste_restore_clipboard_button")
+                    ) {
+                        Icon(Icons.Rounded.ContentPaste, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("لصق واسترجاع من الحافظة مباشرة")
+                    }
+
                     OutlinedButton(
                         onClick = {
                             openFileLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
@@ -340,10 +360,10 @@ fun SettingsSheet(
                             .testTag("backup_json_input")
                     )
 
-                    Button(
+                    OutlinedButton(
                         onClick = {
-                            if (backupText.isNotBlank()) {
-                                viewModel.importBackupJson(backupText)
+                            if (backupText.isNotBlank() && viewModel.importBackupJson(backupText)) {
+                                backupText = ""
                             }
                         },
                         enabled = backupText.isNotBlank(),

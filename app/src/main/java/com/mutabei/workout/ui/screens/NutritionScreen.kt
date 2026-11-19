@@ -83,13 +83,14 @@ fun NutritionScreen(
         viewModel.computeTargets(snapshot.config, snapshot.bodyRecords)
     }
 
-    // Daily totals across all 33 nutrient keys
+    // Daily totals across all tracked nutrient keys
     val totals = remember(day.items) {
-        val sum = DoubleArray(33)
-        val has = BooleanArray(33)
+        val count = NutritionConstants.NUTRIENT_COUNT
+        val sum = DoubleArray(count)
+        val has = BooleanArray(count)
         day.items.forEach { it ->
             it.nutrients.forEachIndexed { idx, v ->
-                if (idx < 33 && v >= 0.0) {
+                if (idx < count && v >= 0.0) {
                     sum[idx] += v * it.grams / 100.0
                     has[idx] = true
                 }
@@ -227,6 +228,15 @@ fun NutritionScreen(
                             target = waterTarget.toDouble(),
                             barColor = semantic.ok
                         )
+                        val foodWaterMl = totalOf("wat").roundToInt()
+                        if (foodWaterMl > 0) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = "+ $foodWaterMl مل رطوبة من الأكل (الإجمالي ${day.waterMl + foodWaterMl} مل)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(
@@ -350,40 +360,86 @@ fun NutritionScreen(
                 }
             }
 
-            // Daily Micronutrients
+            // Daily Micronutrients (grouped cleanly: macros/amino, 12 vitamins, 12 minerals, other)
             item(key = "daily_micros") {
                 val rda = if (snapshot.config.sex == "f") NutritionConstants.RDA_FEMALE else NutritionConstants.RDA_MALE
+                val sections = listOf(
+                    "تفاصيل الماكروز والأحماض والدهون" to NutritionConstants.MICRO_GROUP_MACROS,
+                    "الفيتامينات (12)" to NutritionConstants.MICRO_GROUP_VITAMINS,
+                    "المعادن (12)" to NutritionConstants.MICRO_GROUP_MINERALS,
+                    "أخرى" to NutritionConstants.MICRO_GROUP_OTHER
+                )
                 ExpandableSectionCard(
-                    title = "الميكروز النهارده (تقريبية للبالغين)",
+                    title = "الميكروز النهارده (تفصيل كامل للبالغين)",
                     testTag = "daily_micros_card"
                 ) {
-                    rda.forEach { (k, targetVal) ->
-                        val v = totalOf(k)
-                        val has = hasDataFor(k)
-                        val isLim = k in NutritionConstants.LIMIT_KEYS
+                    sections.forEachIndexed { sIdx, (sectionTitle, keys) ->
+                        if (sIdx > 0) {
+                            Spacer(Modifier.height(10.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = sectionTitle,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        keys.forEach { k ->
+                            val targetVal = rda[k] ?: return@forEach
+                            val v = totalOf(k)
+                            val has = hasDataFor(k)
+                            val isLim = k in NutritionConstants.LIMIT_KEYS
+                            val formattedVal = (v * 10).roundToInt() / 10.0
+                            val unit = NutritionConstants.NUTRIENT_UNITS[k] ?: ""
+                            val valueText = if (k == "vD") {
+                                val iuCur = (v * 40.0).roundToInt()
+                                val iuTarget = (targetVal * 40.0).roundToInt()
+                                "$iuCur / $iuTarget IU ($formattedVal مكجم)"
+                            } else {
+                                "$formattedVal / ${if (isLim) "حد " else ""}$targetVal $unit"
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = (NutritionConstants.NUTRIENT_LABELS[k] ?: k) + if (has) "" else " (مفيش بيانات)",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Text(
+                                    text = valueText,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            Spacer(Modifier.height(3.dp))
+                            MetricProgressBar(
+                                current = v,
+                                target = targetVal,
+                                barColor = if (isLim && v > targetVal) semantic.low else MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    val foodMoisture = totalOf("wat")
+                    if (hasDataFor("wat")) {
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = (NutritionConstants.NUTRIENT_LABELS[k] ?: k) + if (has) "" else " (مفيش بيانات)",
+                                text = NutritionConstants.NUTRIENT_LABELS["wat"] ?: "ماء الأكل",
                                 style = MaterialTheme.typography.bodySmall
                             )
                             Text(
-                                text = "${(v * 10).roundToInt() / 10.0} / ${if (isLim) "حد " else ""}$targetVal ${NutritionConstants.NUTRIENT_UNITS[k] ?: ""}",
-                                style = MaterialTheme.typography.bodySmall
+                                text = "${foodMoisture.roundToInt()} مل",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
-                        Spacer(Modifier.height(3.dp))
-                        MetricProgressBar(
-                            current = v,
-                            target = targetVal,
-                            barColor = if (isLim && v > targetVal) semantic.low else MaterialTheme.colorScheme.primary
-                        )
                     }
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "الأصناف اللي مفيهاش قيمة لعنصر معين بتتحسب صفر في العنصر ده. فالأرقام ممكن تكون أقل من الحقيقي.",
+                        text = "الأصناف اللي بتتحلل بـ Gemini بتجيب كل الميكروز كاملة (USDA + الجدول المصري). الأصناف القديمة اللي مفيهاش قيمة لعنصر معين بتتحسب صفر فيه.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -771,12 +827,13 @@ private fun WeeklyMicrosCard(
 
     val rows = remember(days, rda) {
         if (days.size < 3) return@remember emptyList<Pair<String, Double>>()
-        val sum = DoubleArray(33)
-        val has = BooleanArray(33)
+        val count = NutritionConstants.NUTRIENT_COUNT
+        val sum = DoubleArray(count)
+        val has = BooleanArray(count)
         days.forEach { d ->
             d.items.forEach { item ->
                 item.nutrients.forEachIndexed { idx, v ->
-                    if (idx < 33 && v >= 0.0) {
+                    if (idx < count && v >= 0.0) {
                         sum[idx] += v * item.grams / 100.0
                         has[idx] = true
                     }

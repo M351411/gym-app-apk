@@ -121,7 +121,7 @@ service cloud.firestore {
              data.refusePercent is number && data.refusePercent >= 0 && data.refusePercent <= 100 &&
              data.favorite is bool &&
              data.custom is bool &&
-             data.nutrients is list && data.nutrients.size() == 33 && data.nutrients[0] is number &&
+             data.nutrients is list && data.nutrients.size() >= 33 && data.nutrients.size() <= 40 && data.nutrients[0] is number &&
              data.portions is list && data.portions.size() <= 30 &&
              (data.portions.size() == 0 || data.portions[0] is map) &&
              (!('recipeServings' in data) || (data.recipeServings is int && data.recipeServings >= 1 && data.recipeServings <= 200)) &&

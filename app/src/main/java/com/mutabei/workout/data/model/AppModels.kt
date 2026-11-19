@@ -244,9 +244,10 @@ data class SetEntry(
     val weight: String = "",
     val reps: String = ""
 ) {
-    fun weightDouble(): Double = weight.replace(',', '.').toDoubleOrNull() ?: 0.0
-    fun repsInt(): Int = reps.trim().toIntOrNull() ?: 0
-    fun estimated1Rm(): Double = WorkoutDefaults.epley1Rm(weightDouble(), repsInt())
+    fun weightDouble(): Double = weight.replace(',', '.').trim().toDoubleOrNull() ?: 0.0
+    fun repsDouble(): Double = reps.replace(',', '.').trim().toDoubleOrNull() ?: 0.0
+    fun repsInt(): Int = repsDouble().roundToInt()
+    fun estimated1Rm(): Double = WorkoutDefaults.epley1Rm(weightDouble(), repsDouble())
 
     fun toMap(): Map<String, Any> = mapOf("weight" to weight, "reps" to reps)
 
@@ -363,11 +364,11 @@ data class LoggedFoodItem(
 
     companion object {
         fun normalizeNutrients(list: List<Double>): List<Double> =
-            if (list.size == 33) list else List(33) { i -> list.getOrNull(i) ?: -1.0 }
+            if (list.size == NutritionConstants.NUTRIENT_COUNT) list else List(NutritionConstants.NUTRIENT_COUNT) { i -> list.getOrNull(i) ?: -1.0 }
 
         fun fromMap(map: Map<*, *>): LoggedFoodItem {
             val rawNut = map["nutrients"] as? List<*> ?: emptyList<Any>()
-            val nut = List(33) { i -> (rawNut.getOrNull(i) as? Number)?.toDouble() ?: -1.0 }
+            val nut = List(NutritionConstants.NUTRIENT_COUNT) { i -> (rawNut.getOrNull(i) as? Number)?.toDouble() ?: -1.0 }
             return LoggedFoodItem(
                 id = (map["id"] as? String).orEmpty().ifBlank { java.util.UUID.randomUUID().toString() },
                 name = (map["name"] as? String).orEmpty(),
@@ -703,7 +704,7 @@ data class CustomFood(
             if (!doc.exists()) return null
             val data = doc.data ?: return null
             val rawNut = data["nutrients"] as? List<*> ?: emptyList<Any>()
-            val nut = List(33) { i -> (rawNut.getOrNull(i) as? Number)?.toDouble() ?: -1.0 }
+            val nut = List(NutritionConstants.NUTRIENT_COUNT) { i -> (rawNut.getOrNull(i) as? Number)?.toDouble() ?: -1.0 }
             val rawPor = data["portions"] as? List<*> ?: emptyList<Any>()
             val rawIng = data["recipeIngredients"] as? List<*>
             return CustomFood(

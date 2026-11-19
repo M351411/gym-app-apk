@@ -92,9 +92,10 @@ private enum class FoodSheetMode(val label: String) {
 }
 
 private val SUPPLEMENT_MICRO_KEYS = listOf(
-    "o3", "vC", "vD", "vE", "vA", "vK",
+    "o3", "epa", "leu", "asug", "chol", "caf",
+    "vC", "vD", "vE", "vA", "vK",
     "b1", "b2", "b3", "b5", "b6", "fol", "b12",
-    "zn", "mg", "fe", "ca", "cu", "se", "mn", "k", "ph"
+    "zn", "mg", "fe", "ca", "cu", "se", "mn", "io", "cr", "k", "ph"
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -797,7 +798,7 @@ private fun AiDetectedItemsReview(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
-            text = "Gemini اتعرّف على الأصناف دي. اختار أقرب صنف من الجدول لكل واحدة وعدّل الجرامات:",
+            text = "Gemini حلّل الأصناف بكل الفيتامينات والمعادن (USDA + الجدول المصري). تقدر تعدّل الجرامات أو تختار صنف من الجدول:",
             style = MaterialTheme.typography.bodySmall,
             color = LocalSemanticColors.current.warn,
             fontWeight = FontWeight.SemiBold
@@ -806,8 +807,20 @@ private fun AiDetectedItemsReview(
             var menuOpen by remember(item.id) { mutableStateOf(false) }
             var gText by remember(item.id, item.grams) { mutableStateOf(item.grams.roundToInt().toString()) }
             val activeVec = item.activeNutrients()
-            val kcal = ((activeVec.getOrNull(0)?.takeIf { it >= 0 } ?: 0.0) * item.grams / 100.0).roundToInt()
-            val pro = ((activeVec.getOrNull(1)?.takeIf { it >= 0 } ?: 0.0) * item.grams / 100.0).roundToInt()
+            fun amt(k: String): Double {
+                val idx = NutritionConstants.NUTRIENT_INDEX[k] ?: return -1.0
+                val raw = activeVec.getOrNull(idx) ?: -1.0
+                return if (raw >= 0.0) raw * item.grams / 100.0 else -1.0
+            }
+            val kcal = amt("kcal").coerceAtLeast(0.0).roundToInt()
+            val pro = amt("p").coerceAtLeast(0.0).roundToInt()
+            val populatedCount = activeVec.count { it >= 0.0 }
+            val detailPreview = buildList {
+                amt("leu").takeIf { it >= 0.0 }?.let { add("ليوسين ${(it * 10).roundToInt() / 10.0}جم") }
+                amt("chol").takeIf { it >= 0.0 }?.let { add("كوليسترول ${it.roundToInt()}مجم") }
+                amt("vD").takeIf { it >= 0.0 }?.let { add("فيتامين D ${(it * 40.0).roundToInt()} IU") }
+                amt("wat").takeIf { it > 0.0 }?.let { add("ماء ${it.roundToInt()}مل") }
+            }.joinToString(" · ")
 
             Surface(
                 shape = MaterialTheme.shapes.small,
@@ -824,6 +837,13 @@ private fun AiDetectedItemsReview(
                         Text(item.detectedName, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                         Text("$kcal سعر · $pro جم بروتين", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                     }
+                    if (populatedCount >= 10) {
+                        Text(
+                            text = "تحليل كامل ($populatedCount عنصر)" + if (detailPreview.isNotBlank()) " · $detailPreview" else "",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -835,10 +855,17 @@ private fun AiDetectedItemsReview(
                             val chosenLabel = if (item.selectedCandidateIndex in item.candidates.indices) {
                                 val c = item.candidates[item.selectedCandidateIndex]
                                 "${c.name} (${NutritionConstants.SOURCE_LABELS[c.source] ?: ""})"
-                            } else "تقدير Gemini AI"
+                            } else "تقدير Gemini الكامل (USDA + مصري)"
                             Text(chosenLabel, maxLines = 1, style = MaterialTheme.typography.bodySmall)
                         }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("تقدير Gemini الكامل (USDA + مصري)") },
+                                onClick = {
+                                    onUpdate(item.id, null, null, -1)
+                                    menuOpen = false
+                                }
+                            )
                             item.candidates.forEachIndexed { idx, c ->
                                 DropdownMenuItem(
                                     text = { Text("${c.name} (${NutritionConstants.SOURCE_LABELS[c.source] ?: ""})") },
@@ -848,13 +875,6 @@ private fun AiDetectedItemsReview(
                                     }
                                 )
                             }
-                            DropdownMenuItem(
-                                text = { Text("تقدير Gemini AI") },
-                                onClick = {
-                                    onUpdate(item.id, null, null, -1)
-                                    menuOpen = false
-                                }
-                            )
                         }
                         OutlinedTextField(
                             value = gText,
@@ -1051,14 +1071,15 @@ private fun RecipeBuilderSection(
     var err by remember { mutableStateOf<String?>(null) }
 
     fun computeTotals(): Triple<DoubleArray, BooleanArray, Double> {
-        val sum = DoubleArray(33)
-        val has = BooleanArray(33)
+        val count = NutritionConstants.NUTRIENT_COUNT
+        val sum = DoubleArray(count)
+        val has = BooleanArray(count)
         var rawW = 0.0
         ingredients.forEach { ing ->
             rawW += ing.grams
             val ret = NutritionConstants.RETENTION_BY_CODE[ing.methodCode]?.factorsPercent
             ing.nutrients.forEachIndexed { i, v ->
-                if (i < 33 && v >= 0.0) {
+                if (i < count && v >= 0.0) {
                     var factor = 1.0
                     if (ret != null) {
                         val key = NutritionConstants.NUTRIENT_KEYS[i]
@@ -1186,7 +1207,7 @@ private fun RecipeBuilderSection(
                     return@Button
                 }
                 err = null
-                val per100 = List(33) { i ->
+                val per100 = List(NutritionConstants.NUTRIENT_COUNT) { i ->
                     if (hasArr[i] && finalWeight > 0) ((totArr[i] / finalWeight * 100000.0).roundToInt() / 1000.0) else -1.0
                 }
                 onSaveRecipe(

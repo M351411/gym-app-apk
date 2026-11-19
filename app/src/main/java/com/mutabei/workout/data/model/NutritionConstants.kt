@@ -10,8 +10,11 @@ object NutritionConstants {
     val NUTRIENT_KEYS: List<String> = listOf(
         "kcal", "p", "f", "c", "fib", "sug", "sat", "mono", "poly", "chol",
         "na", "k", "ca", "fe", "mg", "ph", "zn", "cu", "mn", "se",
-        "vA", "vC", "b1", "b2", "b3", "b6", "fol", "b12", "vD", "vE", "vK", "b5", "o3"
+        "vA", "vC", "b1", "b2", "b3", "b6", "fol", "b12", "vD", "vE", "vK", "b5", "o3",
+        "leu", "asug", "epa", "io", "cr", "caf", "wat"
     )
+
+    val NUTRIENT_COUNT: Int = NUTRIENT_KEYS.size
 
     val NUTRIENT_INDEX: Map<String, Int> = NUTRIENT_KEYS.withIndex().associate { (i, k) -> k to i }
 
@@ -41,39 +44,54 @@ object NutritionConstants {
         "b1" to "B1 ثيامين",
         "b2" to "B2 ريبوفلافين",
         "b3" to "B3 نياسين",
-        "b6" to "B6",
-        "fol" to "فولات",
-        "b12" to "B12",
+        "b6" to "B6 بيريدوكسين",
+        "fol" to "B9 فولات",
+        "b12" to "B12 كوبالامين",
         "vD" to "فيتامين D",
         "vE" to "فيتامين E",
         "vK" to "فيتامين K",
-        "b5" to "B5",
-        "o3" to "أوميجا 3"
+        "b5" to "B5 بانتوثينيك",
+        "o3" to "أوميجا 3 (إجمالي)",
+        "leu" to "ليوسين (Leucine)",
+        "asug" to "سكر مضاف",
+        "epa" to "أوميجا 3 (EPA+DHA)",
+        "io" to "يود",
+        "cr" to "كروميوم",
+        "caf" to "كافيين",
+        "wat" to "ماء/رطوبة الأكل"
     )
 
     val NUTRIENT_UNITS: Map<String, String> = mapOf(
         "chol" to "مجم", "na" to "مجم", "k" to "مجم", "ca" to "مجم",
         "fe" to "مجم", "mg" to "مجم", "ph" to "مجم", "zn" to "مجم",
-        "cu" to "مجم", "mn" to "مجم", "se" to "مكجم", "vA" to "مكجم",
-        "vC" to "مجم", "b1" to "مجم", "b2" to "مجم", "b3" to "مجم",
+        "cu" to "مجم", "mn" to "مجم", "se" to "مكجم", "io" to "مكجم", "cr" to "مكجم",
+        "vA" to "مكجم", "vC" to "مجم", "b1" to "مجم", "b2" to "مجم", "b3" to "مجم",
         "b6" to "مجم", "fol" to "مكجم", "b12" to "مكجم", "vD" to "مكجم",
-        "vE" to "مجم", "vK" to "مكجم", "b5" to "مجم", "fib" to "جم", "o3" to "جم"
+        "vE" to "مجم", "vK" to "مكجم", "b5" to "مجم",
+        "fib" to "جم", "sat" to "جم", "asug" to "جم", "leu" to "جم",
+        "o3" to "جم", "epa" to "جم", "caf" to "مجم", "wat" to "مل"
     )
 
     val RDA_MALE: LinkedHashMap<String, Double> = linkedMapOf(
-        "fib" to 30.0, "chol" to 300.0, "na" to 2300.0, "k" to 3400.0,
-        "ca" to 1000.0, "fe" to 8.0, "mg" to 400.0, "ph" to 700.0,
-        "zn" to 11.0, "cu" to 0.9, "mn" to 2.3, "se" to 55.0,
-        "vA" to 900.0, "vC" to 90.0, "b1" to 1.2, "b2" to 1.3,
-        "b3" to 16.0, "b6" to 1.3, "fol" to 400.0, "b12" to 2.4,
-        "vD" to 15.0, "vE" to 15.0, "vK" to 120.0, "b5" to 5.0, "o3" to 1.6
+        "leu" to 3.0, "fib" to 30.0, "asug" to 36.0, "sat" to 22.0,
+        "o3" to 1.6, "epa" to 0.5, "chol" to 300.0,
+        "vA" to 900.0, "vC" to 90.0, "vD" to 15.0, "vE" to 15.0, "vK" to 120.0,
+        "b1" to 1.2, "b2" to 1.3, "b3" to 16.0, "b5" to 5.0, "b6" to 1.3,
+        "fol" to 400.0, "b12" to 2.4,
+        "na" to 2300.0, "k" to 3400.0, "ca" to 1000.0, "fe" to 8.0,
+        "mg" to 400.0, "ph" to 700.0, "zn" to 11.0, "cu" to 0.9,
+        "mn" to 2.3, "se" to 55.0, "io" to 150.0, "cr" to 35.0,
+        "caf" to 400.0
     )
 
     val RDA_FEMALE: LinkedHashMap<String, Double> = LinkedHashMap(RDA_MALE).apply {
         put("fib", 25.0)
+        put("asug", 25.0)
+        put("sat", 18.0)
         put("fe", 18.0)
         put("mg", 310.0)
         put("zn", 8.0)
+        put("cr", 25.0)
         put("vA", 700.0)
         put("vC", 75.0)
         put("b1", 1.1)
@@ -83,7 +101,12 @@ object NutritionConstants {
         put("o3", 1.1)
     }
 
-    val LIMIT_KEYS: Set<String> = setOf("na", "chol")
+    val LIMIT_KEYS: Set<String> = setOf("na", "chol", "asug", "sat", "caf")
+
+    val MICRO_GROUP_MACROS: List<String> = listOf("leu", "fib", "asug", "sat", "o3", "epa", "chol")
+    val MICRO_GROUP_VITAMINS: List<String> = listOf("vA", "vC", "vD", "vE", "vK", "b1", "b2", "b3", "b5", "b6", "fol", "b12")
+    val MICRO_GROUP_MINERALS: List<String> = listOf("na", "k", "ca", "fe", "mg", "ph", "zn", "cu", "mn", "se", "io", "cr")
+    val MICRO_GROUP_OTHER: List<String> = listOf("caf")
 
     val SOURCE_LABELS: Map<String, String> = mapOf(
         "e" to "جدول الأغذية المصري",
@@ -235,7 +258,7 @@ object NutritionConstants {
         .replace("ى", "ي")
         .replace("ة", "ه")
 
-    fun emptyNutrientVector(): List<Double> = List(33) { -1.0 }
+    fun emptyNutrientVector(): List<Double> = List(NUTRIENT_COUNT) { -1.0 }
 
     fun vectorFromMap(map: Map<String, Double?>): List<Double> =
         NUTRIENT_KEYS.map { key -> map[key]?.takeIf { !it.isNaN() } ?: -1.0 }

@@ -158,11 +158,13 @@ object WorkoutDefaults {
 
     fun youtubeUrl(videoId: String): String = "https://www.youtube.com/watch?v=$videoId"
 
-    fun epley1Rm(weight: Double, reps: Int): Double =
-        if (weight > 0.0 && reps > 0) weight * (1.0 + if (reps > 1) reps / 30.0 else 0.0) else 0.0
+    fun epley1Rm(weight: Double, reps: Int): Double = epley1Rm(weight, reps.toDouble())
+
+    fun epley1Rm(weight: Double, reps: Double): Double =
+        if (weight > 0.0 && reps > 0.0) weight * (1.0 + if (reps > 1.0) reps / 30.0 else 0.0) else 0.0
 
     fun repHint(repsRaw: String, minReps: Int, maxReps: Int): RepHint? {
-        val r = repsRaw.trim().toIntOrNull() ?: return null
+        val r = repsRaw.replace(',', '.').trim().toDoubleOrNull() ?: return null
         return when {
             r > maxReps -> RepHint(HintLevel.HIGH, "فوق الرينج. زوّد الوزن المرة الجاية.")
             r < minReps -> RepHint(HintLevel.LOW, "تحت الرينج. قلّل الوزن شوية.")

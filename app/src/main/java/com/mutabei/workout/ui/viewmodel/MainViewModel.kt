@@ -741,14 +741,17 @@ class MainViewModel(
                 val customFoods = currentSnapshot().customFoods
                 val reviewItems = rawItems.mapIndexed { idx, raw ->
                     val cands = offlineFoodRepo.candidatesFor(raw, customFoods)
+                    val vec = NutritionConstants.vectorFromMap(raw.fallbackPer100)
+                    val populatedCount = vec.count { it >= 0.0 }
                     AiFoodReviewItem(
                         id = "ai_${idx}_${System.currentTimeMillis()}",
                         detectedName = raw.nameAr.ifBlank { raw.nameEn },
                         grams = raw.grams,
                         selected = true,
-                        fallbackVector = NutritionConstants.vectorFromMap(raw.fallbackPer100),
+                        fallbackVector = vec,
                         candidates = cands,
-                        selectedCandidateIndex = if (cands.isNotEmpty()) 0 else -1
+                        // Prefer Gemini's full micronutrient analysis when populated; user can still switch to DB candidates
+                        selectedCandidateIndex = if (populatedCount >= 10 || cands.isEmpty()) -1 else 0
                     )
                 }
                 _foodSheetAi.update {
@@ -965,6 +968,8 @@ class MainViewModel(
         root.put("start", cfg.startDate)
         root.put("rest", cfg.restSeconds)
         root.put("theme", cfg.themeMode)
+        root.put("day", _selectedDayIndex.value)
+        root.put("nd", _selectedNutritionDate.value)
         root.put("plan", JSONArray().apply {
             cfg.effectiveSplit().forEach { d ->
                 put(JSONObject().apply {
@@ -1017,97 +1022,416 @@ class MainViewModel(
                     b.proteinKg?.let { put("pro", it) }; b.mineralsKg?.let { put("min", it) }
                     b.bmrKcal?.let { put("bmr", it) }; b.vfl?.let { put("vfl", it) }
                     b.whr?.let { put("whr", it) }; b.score?.let { put("score", it) }
+                    b.targetWeightKg?.let { put("tgt", it) }; b.fatControlKg?.let { put("fc", it) }
+                    b.muscleControlKg?.let { put("mc", it) }; b.bmi?.let { put("bmi", it) }
+                    b.obesityDegree?.let { put("obd", it) }; b.heightCm?.let { put("h", it) }
+                    if (b.segmentalLeanKg.isNotEmpty()) put("sl_kg", JSONObject(b.segmentalLeanKg))
+                    if (b.segmentalLeanPercent.isNotEmpty()) put("sl_pct", JSONObject(b.segmentalLeanPercent))
+                    if (b.segmentalFatKg.isNotEmpty()) put("sf_kg", JSONObject(b.segmentalFatKg))
+                })
+            }
+        })
+        root.put("nut", JSONObject().apply {
+            snap.nutritionDays.forEach { (dateKey, day) ->
+                if (day.items.isNotEmpty() || day.waterMl > 0) {
+                    put(dateKey, JSONObject().apply {
+                        put("w", day.waterMl)
+                        put("items", JSONArray().apply {
+                            day.items.forEach { it ->
+                                put(JSONObject().apply {
+                                    put("n", it.name)
+                                    put("src", it.source)
+                                    put("g", it.grams)
+                                    put("m", it.mealIndex)
+                                    put("p", JSONArray(LoggedFoodItem.normalizeNutrients(it.nutrients)))
+                                })
+                            }
+                        })
+                    })
+                }
+            }
+        })
+        root.put("fav", JSONArray().apply {
+            snap.customFoods.filter { it.favorite && !it.custom }.forEach { f ->
+                put(JSONObject().apply {
+                    put("n", f.name)
+                    put("src", f.source)
+                    put("ref", f.refusePercent)
+                    put("p", JSONArray(LoggedFoodItem.normalizeNutrients(f.nutrients)))
+                    put("por", JSONArray().apply {
+                        f.portions.forEach { po -> put(JSONObject().apply { put("n", po.name); put("g", po.grams) }) }
+                    })
+                })
+            }
+        })
+        root.put("cf", JSONArray().apply {
+            snap.customFoods.filter { it.custom }.forEach { f ->
+                put(JSONObject().apply {
+                    put("n", f.name)
+                    put("src", f.source)
+                    put("bc", f.barcode)
+                    put("ref", f.refusePercent)
+                    put("fav", f.favorite)
+                    put("p", JSONArray(LoggedFoodItem.normalizeNutrients(f.nutrients)))
+                    put("por", JSONArray().apply {
+                        f.portions.forEach { po -> put(JSONObject().apply { put("n", po.name); put("g", po.grams) }) }
+                    })
                 })
             }
         })
         return root.toString(2)
     }
 
-    fun importBackupJson(jsonText: String): Boolean {
-        return try {
-            val root = JSONObject(jsonText)
-            val snap = currentSnapshot()
-            var cfg = snap.config
-            if (root.has("start")) cfg = cfg.copy(startDate = root.optString("start", cfg.startDate))
-            if (root.has("rest")) cfg = cfg.copy(restSeconds = root.optInt("rest", cfg.restSeconds).coerceIn(30, 900))
-            if (root.has("plan")) {
-                val parsedPlan = parseSplitJsonArray(root.getJSONArray("plan"))
-                if (parsedPlan.isNotEmpty()) cfg = cfg.copy(splitDays = parsedPlan)
+    private fun optDoubleFlex(obj: JSONObject, key: String): Double? {
+        if (!obj.has(key) || obj.isNull(key)) return null
+        val raw = obj.opt(key) ?: return null
+        return when (raw) {
+            is Number -> raw.toDouble().takeIf { !it.isNaN() }
+            is String -> raw.replace(',', '.').trim().toDoubleOrNull()?.takeIf { !it.isNaN() }
+            else -> null
+        }
+    }
+
+    private fun optIntFlex(obj: JSONObject, key: String): Int? =
+        optDoubleFlex(obj, key)?.roundToInt()
+
+    private fun parseNutrientArray(arr: JSONArray?): List<Double> {
+        if (arr == null) return NutritionConstants.emptyNutrientVector()
+        return List(NutritionConstants.NUTRIENT_COUNT) { i ->
+            if (i < arr.length() && !arr.isNull(i)) {
+                val raw = arr.opt(i)
+                when (raw) {
+                    is Number -> raw.toDouble().takeIf { !it.isNaN() } ?: -1.0
+                    is String -> raw.replace(',', '.').trim().toDoubleOrNull() ?: -1.0
+                    else -> -1.0
+                }
+            } else -1.0
+        }
+    }
+
+    private fun parsePortionsArray(arr: JSONArray?): List<PortionOption> {
+        if (arr == null) return emptyList()
+        val list = mutableListOf<PortionOption>()
+        for (i in 0 until arr.length()) {
+            val po = arr.optJSONObject(i) ?: continue
+            val name = po.optString("n", po.optString("name", "")).trim()
+            val grams = optDoubleFlex(po, "g") ?: optDoubleFlex(po, "grams") ?: continue
+            if (name.isNotBlank() && grams > 0.0) {
+                list.add(PortionOption(name, grams))
             }
-            if (root.has("prof")) {
-                val p = root.getJSONObject("prof")
-                cfg = cfg.copy(
-                    sex = p.optString("sex", cfg.sex),
-                    age = p.optInt("age", cfg.age).coerceIn(10, 120),
-                    heightCm = p.optDouble("h", cfg.heightCm).takeIf { !it.isNaN() }?.coerceIn(100.0, 250.0) ?: cfg.heightCm,
-                    activityFactor = p.optDouble("act", cfg.activityFactor).takeIf { !it.isNaN() }?.coerceIn(1.1, 2.5) ?: cfg.activityFactor,
-                    goal = p.optString("goal", cfg.goal)
+        }
+        return list
+    }
+
+    private fun parseDoubleMapJson(obj: JSONObject?): Map<String, Double> {
+        if (obj == null) return emptyMap()
+        val map = mutableMapOf<String, Double>()
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            optDoubleFlex(obj, k)?.let { map[k] = it }
+        }
+        return map
+    }
+
+    fun importBackupJson(jsonText: String): Boolean {
+        val cleaned = jsonText.trim()
+        val root = try {
+            JSONObject(cleaned)
+        } catch (e: Exception) {
+            Log.e(TAG, "Backup JSON parse failed", e)
+            showToast("النص مش بصيغة JSON صحيحة. تأكد إنك نسخت النسخة الاحتياطية كاملة.")
+            return false
+        }
+
+        val snap = currentSnapshot()
+        var cfg = snap.config.copy(userId = currentUserId)
+
+        if (root.has("start")) {
+            val st = root.optString("start", "").trim()
+            if (st.matches(Regex("\\d{4}-\\d{2}-\\d{2}"))) cfg = cfg.copy(startDate = st)
+        }
+        optIntFlex(root, "rest")?.let { cfg = cfg.copy(restSeconds = it.coerceIn(30, 900)) }
+        if (root.has("theme")) {
+            val th = root.optString("theme", "")
+            if (th in listOf("system", "light", "dark")) cfg = cfg.copy(themeMode = th)
+        }
+        if (root.has("plan")) {
+            val parsedPlan = parseSplitJsonArray(root.optJSONArray("plan") ?: JSONArray())
+            if (parsedPlan.isNotEmpty()) cfg = cfg.copy(splitDays = parsedPlan)
+        }
+
+        // Restore exercise alternatives (crucial so sessions map to the exact chosen alternative!)
+        val altObj = root.optJSONObject("alt")
+        val restoredAlts = mutableMapOf<String, String>()
+        if (altObj != null) {
+            val altKeys = altObj.keys()
+            while (altKeys.hasNext()) {
+                val ak = altKeys.next()
+                val av = altObj.optString(ak, "").trim()
+                if (ak.isNotBlank() && av.isNotBlank()) {
+                    restoredAlts[ak] = av
+                }
+            }
+            cfg = cfg.copy(alternatives = restoredAlts)
+        }
+
+        // Restore full profile & manual nutrition target overrides (supports both strings and numbers)
+        val p = root.optJSONObject("prof")
+        if (p != null) {
+            val sex = p.optString("sex", cfg.sex).let { if (it == "f") "f" else "m" }
+            val goal = p.optString("goal", cfg.goal).let { if (it in listOf("bulk", "cut", "keep")) it else cfg.goal }
+            cfg = cfg.copy(
+                sex = sex,
+                age = optIntFlex(p, "age")?.coerceIn(10, 120) ?: cfg.age,
+                heightCm = optDoubleFlex(p, "h")?.coerceIn(100.0, 250.0) ?: cfg.heightCm,
+                weightOverride = optDoubleFlex(p, "w")?.coerceIn(0.0, 350.0) ?: cfg.weightOverride,
+                bodyFatOverride = optDoubleFlex(p, "bf")?.coerceIn(0.0, 70.0) ?: cfg.bodyFatOverride,
+                activityFactor = optDoubleFlex(p, "act")?.coerceIn(1.1, 2.5) ?: cfg.activityFactor,
+                goal = goal,
+                targetBodyFat = optDoubleFlex(p, "tf")?.coerceIn(3.0, 50.0) ?: cfg.targetBodyFat,
+                kcalOverride = optIntFlex(p, "ok")?.coerceIn(0, 10000) ?: cfg.kcalOverride,
+                proteinOverride = optIntFlex(p, "op")?.coerceIn(0, 1000) ?: cfg.proteinOverride,
+                carbsOverride = optIntFlex(p, "oc")?.coerceIn(0, 2000) ?: cfg.carbsOverride,
+                fatOverride = optIntFlex(p, "of")?.coerceIn(0, 500) ?: cfg.fatOverride
+            )
+        }
+
+        // Restore active split day & selected nutrition date
+        val splitSize = cfg.effectiveSplit().size.coerceAtLeast(1)
+        optIntFlex(root, "day")?.let { _selectedDayIndex.value = it.coerceIn(0, splitSize - 1) }
+        val nd = root.optString("nd", "").trim()
+        if (nd.matches(Regex("\\d{4}-\\d{2}-\\d{2}"))) {
+            _selectedNutritionDate.value = nd
+        }
+        _workoutDrafts.value = emptyMap()
+
+        // Parse workout sessions
+        val sessionsToSave = mutableListOf<WorkoutSession>()
+        val sessObj = root.optJSONObject("sess")
+        if (sessObj != null) {
+            val keys = sessObj.keys()
+            while (keys.hasNext()) {
+                val sk = keys.next()
+                val so = sessObj.optJSONObject(sk) ?: continue
+                val date = so.optString("d", so.optString("date", "")).trim().ifBlank {
+                    sk.substringBefore("_").ifBlank { todayIso() }
+                }
+                val dayIdx = optIntFlex(so, "day")
+                    ?: optIntFlex(so, "dayIndex")
+                    ?: sk.substringAfter("_", "0").toIntOrNull()
+                    ?: 0
+                val exObj = so.optJSONObject("ex") ?: so.optJSONObject("exercises") ?: JSONObject()
+                val exMap = mutableMapOf<String, LoggedExercise>()
+                val exKeys = exObj.keys()
+                while (exKeys.hasNext()) {
+                    val ek = exKeys.next()
+                    val eo = exObj.optJSONObject(ek) ?: continue
+                    val exName = eo.optString("n", eo.optString("name", "")).trim()
+                    val setsArr = eo.optJSONArray("sets") ?: JSONArray()
+                    val sets = mutableListOf<SetEntry>()
+                    for (si in 0 until setsArr.length()) {
+                        val st = setsArr.optJSONObject(si) ?: continue
+                        val wVal = if (st.isNull("w")) st.optString("weight", "") else st.opt("w")?.toString().orEmpty()
+                        val rVal = if (st.isNull("r")) st.optString("reps", "") else st.opt("r")?.toString().orEmpty()
+                        sets.add(SetEntry(wVal.trim(), rVal.trim()))
+                    }
+                    if (exName.isNotBlank() && sets.isNotEmpty()) {
+                        exMap[ek] = LoggedExercise(exName, sets)
+                    }
+                }
+                if (exMap.isNotEmpty() || so.optString("note", "").isNotBlank()) {
+                    sessionsToSave.add(
+                        WorkoutSession(
+                            id = sk,
+                            userId = currentUserId,
+                            date = date,
+                            dayIndex = dayIdx.coerceIn(0, 13),
+                            note = so.optString("note", ""),
+                            exercises = exMap
+                        )
+                    )
+                }
+            }
+        }
+
+        // Parse body records
+        val bodyToSave = mutableListOf<BodyRecord>()
+        val bodyArr = root.optJSONArray("body")
+        if (bodyArr != null) {
+            for (i in 0 until bodyArr.length()) {
+                val bo = bodyArr.optJSONObject(i) ?: continue
+                val date = bo.optString("d", bo.optString("date", "")).trim()
+                if (date.isBlank()) continue
+                bodyToSave.add(
+                    BodyRecord(
+                        userId = currentUserId,
+                        date = date,
+                        weightKg = optDoubleFlex(bo, "w"),
+                        smmKg = optDoubleFlex(bo, "m") ?: optDoubleFlex(bo, "smm"),
+                        pbfPercent = optDoubleFlex(bo, "f") ?: optDoubleFlex(bo, "pbf"),
+                        bfmKg = optDoubleFlex(bo, "bfm"),
+                        ffmKg = optDoubleFlex(bo, "ffm"),
+                        tbwL = optDoubleFlex(bo, "tbw"),
+                        proteinKg = optDoubleFlex(bo, "pro"),
+                        mineralsKg = optDoubleFlex(bo, "min"),
+                        bmrKcal = optDoubleFlex(bo, "bmr"),
+                        vfl = optDoubleFlex(bo, "vfl"),
+                        whr = optDoubleFlex(bo, "whr"),
+                        score = optDoubleFlex(bo, "score"),
+                        targetWeightKg = optDoubleFlex(bo, "tgt"),
+                        fatControlKg = optDoubleFlex(bo, "fc"),
+                        muscleControlKg = optDoubleFlex(bo, "mc"),
+                        bmi = optDoubleFlex(bo, "bmi"),
+                        obesityDegree = optDoubleFlex(bo, "obd"),
+                        heightCm = optDoubleFlex(bo, "h"),
+                        segmentalLeanKg = parseDoubleMapJson(bo.optJSONObject("sl_kg") ?: bo.optJSONObject("sl")),
+                        segmentalLeanPercent = parseDoubleMapJson(bo.optJSONObject("sl_pct")),
+                        segmentalFatKg = parseDoubleMapJson(bo.optJSONObject("sf_kg") ?: bo.optJSONObject("sf"))
+                    )
                 )
             }
-            updateConfig(cfg)
-
-            // Restore sessions
-            val sessObj = root.optJSONObject("sess")
-            if (sessObj != null) {
-                viewModelScope.launch {
-                    val keys = sessObj.keys()
-                    while (keys.hasNext()) {
-                        val sk = keys.next()
-                        val so = sessObj.optJSONObject(sk) ?: continue
-                        val exObj = so.optJSONObject("ex") ?: JSONObject()
-                        val exMap = mutableMapOf<String, LoggedExercise>()
-                        val exKeys = exObj.keys()
-                        while (exKeys.hasNext()) {
-                            val ek = exKeys.next()
-                            val eo = exObj.optJSONObject(ek) ?: continue
-                            val setsArr = eo.optJSONArray("sets") ?: JSONArray()
-                            val sets = (0 until setsArr.length()).map { si ->
-                                val st = setsArr.getJSONObject(si)
-                                SetEntry(st.optString("w", ""), st.optString("r", ""))
-                            }
-                            exMap[ek] = LoggedExercise(eo.optString("n", ""), sets)
-                        }
-                        firestoreRepo.saveWorkoutSession(
-                            currentUserId,
-                            WorkoutSession(
-                                id = sk,
-                                userId = currentUserId,
-                                date = so.optString("d", todayIso()),
-                                dayIndex = so.optInt("day", 0),
-                                note = so.optString("note", ""),
-                                exercises = exMap
-                            )
-                        )
-                    }
-                }
-            }
-
-            // Restore body records
-            val bodyArr = root.optJSONArray("body")
-            if (bodyArr != null) {
-                viewModelScope.launch {
-                    for (i in 0 until bodyArr.length()) {
-                        val bo = bodyArr.optJSONObject(i) ?: continue
-                        fun od(k: String): Double? = if (bo.has(k) && !bo.isNull(k)) bo.optDouble(k, Double.NaN).takeIf { !it.isNaN() } else null
-                        val rec = BodyRecord(
-                            userId = currentUserId,
-                            date = bo.optString("d", todayIso()),
-                            weightKg = od("w"), smmKg = od("m"), pbfPercent = od("f"),
-                            bfmKg = od("bfm"), ffmKg = od("ffm"), tbwL = od("tbw"),
-                            proteinKg = od("pro"), mineralsKg = od("min"), bmrKcal = od("bmr"),
-                            vfl = od("vfl"), whr = od("whr"), score = od("score")
-                        )
-                        firestoreRepo.saveBodyRecord(currentUserId, rec)
-                    }
-                }
-            }
-            showToast("تم استرجاع النسخة الاحتياطية ✅")
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "Backup restore failed", e)
-            showToast("النص مش نسخة احتياطية صحيحة.")
-            false
         }
+
+        // Parse nutrition days (skip completely empty days)
+        val nutritionToSave = mutableListOf<NutritionDay>()
+        val nutObj = root.optJSONObject("nut")
+        if (nutObj != null) {
+            val nutKeys = nutObj.keys()
+            while (nutKeys.hasNext()) {
+                val dateKey = nutKeys.next().trim()
+                if (!dateKey.matches(Regex("\\d{4}-\\d{2}-\\d{2}"))) continue
+                val dayObj = nutObj.optJSONObject(dateKey) ?: continue
+                val waterMl = (optIntFlex(dayObj, "w") ?: optIntFlex(dayObj, "waterMl") ?: 0).coerceIn(0, 20000)
+                val itemsArr = dayObj.optJSONArray("items") ?: JSONArray()
+                val items = mutableListOf<LoggedFoodItem>()
+                for (i in 0 until itemsArr.length()) {
+                    val io = itemsArr.optJSONObject(i) ?: continue
+                    val name = io.optString("n", io.optString("name", "")).trim()
+                    if (name.isBlank()) continue
+                    val src = io.optString("src", io.optString("source", "e")).ifBlank { "e" }
+                    val grams = optDoubleFlex(io, "g") ?: optDoubleFlex(io, "grams") ?: 100.0
+                    val mealIdx = (optIntFlex(io, "m") ?: optIntFlex(io, "mealIndex") ?: 0).coerceIn(0, 4)
+                    val nutVec = parseNutrientArray(io.optJSONArray("p") ?: io.optJSONArray("nutrients"))
+                    items.add(
+                        LoggedFoodItem(
+                            id = io.optString("id", "").ifBlank { UUID.randomUUID().toString() },
+                            name = name,
+                            source = src,
+                            grams = grams,
+                            mealIndex = mealIdx,
+                            nutrients = nutVec
+                        )
+                    )
+                }
+                if (items.isNotEmpty() || waterMl > 0) {
+                    nutritionToSave.add(
+                        NutritionDay(
+                            id = dateKey,
+                            userId = currentUserId,
+                            date = dateKey,
+                            waterMl = waterMl,
+                            items = items
+                        )
+                    )
+                }
+            }
+        }
+
+        // Parse favorites & custom foods (deduplicated against existing foods)
+        val foodsToSave = mutableListOf<CustomFood>()
+        val existingByKey = snap.customFoods.associateBy { "${it.name}|${it.source}|${it.custom}" }
+        val seenFoodKeys = mutableSetOf<String>()
+
+        val favArr = root.optJSONArray("fav")
+        if (favArr != null) {
+            for (i in 0 until favArr.length()) {
+                val fo = favArr.optJSONObject(i) ?: continue
+                val name = fo.optString("n", fo.optString("name", "")).trim()
+                if (name.isBlank()) continue
+                val src = fo.optString("src", fo.optString("source", "e")).ifBlank { "e" }
+                val dedupKey = "$name|$src|false"
+                if (!seenFoodKeys.add(dedupKey)) continue
+                val existingId = existingByKey[dedupKey]?.id.orEmpty()
+                foodsToSave.add(
+                    CustomFood(
+                        id = existingId,
+                        userId = currentUserId,
+                        name = name,
+                        source = src,
+                        barcode = fo.optString("bc", fo.optString("barcode", "")),
+                        refusePercent = optDoubleFlex(fo, "ref") ?: 0.0,
+                        favorite = true,
+                        custom = false,
+                        nutrients = parseNutrientArray(fo.optJSONArray("p") ?: fo.optJSONArray("nutrients")),
+                        portions = parsePortionsArray(fo.optJSONArray("por") ?: fo.optJSONArray("portions"))
+                    )
+                )
+            }
+        }
+
+        val cfArr = root.optJSONArray("cf")
+        if (cfArr != null) {
+            for (i in 0 until cfArr.length()) {
+                val co = cfArr.optJSONObject(i) ?: continue
+                val name = co.optString("n", co.optString("name", "")).trim()
+                if (name.isBlank()) continue
+                val src = co.optString("src", co.optString("source", "c")).ifBlank { "c" }
+                val dedupKey = "$name|$src|true"
+                if (!seenFoodKeys.add(dedupKey)) continue
+                val existingId = existingByKey[dedupKey]?.id.orEmpty()
+                foodsToSave.add(
+                    CustomFood(
+                        id = existingId,
+                        userId = currentUserId,
+                        name = name,
+                        source = src,
+                        barcode = co.optString("bc", co.optString("barcode", "")),
+                        refusePercent = optDoubleFlex(co, "ref") ?: 0.0,
+                        favorite = co.optBoolean("fav", false),
+                        custom = true,
+                        nutrients = parseNutrientArray(co.optJSONArray("p") ?: co.optJSONArray("nutrients")),
+                        portions = parsePortionsArray(co.optJSONArray("por") ?: co.optJSONArray("portions"))
+                    )
+                )
+            }
+        }
+
+        viewModelScope.launch {
+            var failures = 0
+            if (firestoreRepo.saveUserConfig(currentUserId, cfg).isFailure) failures++
+            var savedSessions = 0
+            for (s in sessionsToSave) {
+                if (firestoreRepo.saveWorkoutSession(currentUserId, s).isSuccess) savedSessions++ else failures++
+            }
+            var savedBody = 0
+            for (b in bodyToSave) {
+                if (firestoreRepo.saveBodyRecord(currentUserId, b).isSuccess) savedBody++ else failures++
+            }
+            var savedNut = 0
+            for (n in nutritionToSave) {
+                if (firestoreRepo.saveNutritionDay(currentUserId, n).isSuccess) savedNut++ else failures++
+            }
+            var savedFoods = 0
+            for (f in foodsToSave) {
+                if (firestoreRepo.saveCustomFood(currentUserId, f).isSuccess) savedFoods++ else failures++
+            }
+
+            val parts = buildList {
+                if (savedSessions > 0) add("$savedSessions جلسات تمرين")
+                if (restoredAlts.isNotEmpty()) add("${restoredAlts.size} بدائل")
+                if (savedNut > 0) add("$savedNut أيام تغذية")
+                if (savedBody > 0) add("$savedBody قياس جسم")
+                if (savedFoods > 0) add("$savedFoods أكلات ومفضلة")
+            }.joinToString(" · ")
+
+            if (failures == 0) {
+                showToast("تم الاسترجاع بالكامل ✅ ${if (parts.isNotBlank()) "($parts)" else ""}")
+            } else {
+                showToast("تم استرجاع جزء من البيانات ($parts) وفشل حفظ $failures عنصر.")
+            }
+        }
+        return true
     }
 
     fun importCustomSplitJson(jsonText: String): Boolean {

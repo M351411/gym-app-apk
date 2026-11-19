@@ -44,7 +44,7 @@ class OfflineFoodRepository(private val appContext: Context) {
                     val category = f.optString(1, "")
                     val src = f.optString(2, "u")
                     val pArr = f.getJSONArray(3)
-                    val nutrients = List(33) { idx ->
+                    val nutrients = List(NutritionConstants.NUTRIENT_COUNT) { idx ->
                         if (idx < pArr.length()) pArr.optDouble(idx, -1.0) else -1.0
                     }
                     val porArr = f.optJSONArray(4)
