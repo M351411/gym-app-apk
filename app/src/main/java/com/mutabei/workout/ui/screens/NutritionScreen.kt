@@ -29,11 +29,14 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,13 +64,17 @@ import com.mutabei.workout.data.repository.NutrientFoodSuggestion
 import com.mutabei.workout.ui.components.AdaptiveTdeeSection
 import com.mutabei.workout.ui.components.AiDeficiencyFixerBlock
 import com.mutabei.workout.ui.components.ExpandableSectionCard
+import com.mutabei.workout.ui.components.FoodBattleDialog
+import com.mutabei.workout.ui.components.MacroTetrisCard
 import com.mutabei.workout.ui.components.MealLeucineMpsChip
 import com.mutabei.workout.ui.components.MetricProgressBar
 import com.mutabei.workout.ui.components.SaveMealPresetDialog
+import com.mutabei.workout.ui.components.SupplementSynergyCard
 import com.mutabei.workout.ui.components.computeAdaptiveTdee
 import com.mutabei.workout.ui.components.computeMealLeucineStatus
 import com.mutabei.workout.ui.theme.LocalSemanticColors
 import com.mutabei.workout.ui.viewmodel.AiDeficiencyUiState
+import com.mutabei.workout.ui.viewmodel.AiMacroTetrisUiState
 import com.mutabei.workout.ui.viewmodel.AppDataSnapshot
 import com.mutabei.workout.ui.viewmodel.FoodSheetAiState
 import com.mutabei.workout.ui.viewmodel.MainViewModel
@@ -82,6 +89,9 @@ fun NutritionScreen(
     aiState: FoodSheetAiState,
     microSuggestions: Map<String, List<NutrientFoodSuggestion>>,
     deficiencyAi: AiDeficiencyUiState,
+    macroTetrisAi: AiMacroTetrisUiState,
+    battleResultsA: List<com.mutabei.workout.data.model.FoodItem>,
+    battleResultsB: List<com.mutabei.workout.data.model.FoodItem>,
     viewModel: MainViewModel
 ) {
     val semantic = LocalSemanticColors.current
@@ -118,6 +128,8 @@ fun NutritionScreen(
     var addSheetMealIndex by remember { mutableStateOf<Int?>(null) }
     var editingItem by remember { mutableStateOf<LoggedFoodItem?>(null) }
     var savingPresetMeal by remember { mutableStateOf<Pair<String, List<LoggedFoodItem>>?>(null) }
+    var showFoodBattle by remember { mutableStateOf(false) }
+    val enrichMicrosBusy by viewModel.enrichMicrosBusy.collectAsStateWithLifecycle()
 
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
@@ -376,16 +388,57 @@ fun NutritionScreen(
                 }
             }
 
-            // Copy yesterday button
+            // Quick Actions Row: Copy yesterday + Food Battle
             item(key = "copy_yesterday") {
-                OutlinedButton(
-                    onClick = { viewModel.copyYesterdayMeals() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("copy_yesterday_button")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("انسخ وجبات أمس")
+                    OutlinedButton(
+                        onClick = { viewModel.copyYesterdayMeals() },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("copy_yesterday_button")
+                    ) {
+                        Text("انسخ وجبات أمس")
+                    }
+                    OutlinedButton(
+                        onClick = { showFoodBattle = true },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("food_battle_button")
+                    ) {
+                        Text("⚔️ مقارنة أكلتين")
+                    }
                 }
+            }
+
+            // Macro Tetris AI (fill remaining daily macros)
+            if (targets != null) {
+                item(key = "macro_tetris") {
+                    val remKcal = (targets.kcal - totalOf("kcal")).roundToInt().coerceAtLeast(0)
+                    val remP = (targets.proteinG - totalOf("p")).roundToInt().coerceAtLeast(0)
+                    val remC = (targets.carbsG - totalOf("c")).roundToInt().coerceAtLeast(0)
+                    val remF = (targets.fatG - totalOf("f")).roundToInt().coerceAtLeast(0)
+                    MacroTetrisCard(
+                        remKcal = remKcal,
+                        remProteinG = remP,
+                        remCarbsG = remC,
+                        remFatG = remF,
+                        busyMessage = macroTetrisAi.busyMessage,
+                        errorMessage = macroTetrisAi.errorMessage,
+                        result = macroTetrisAi.result,
+                        onGenerate = { viewModel.requestMacroTetris(remKcal, remP, remC, remF) }
+                    )
+                }
+            }
+
+            // Supplement Timing & Nutrient Interaction Alerts
+            item(key = "supplement_synergy") {
+                SupplementSynergyCard(
+                    dayItems = day.items,
+                    totalOf = ::totalOf
+                )
             }
 
             // Daily Micronutrients (grouped cleanly: macros/amino, 12 vitamins, 12 minerals, other)
@@ -397,10 +450,63 @@ fun NutritionScreen(
                     "المعادن (12)" to NutritionConstants.MICRO_GROUP_MINERALS,
                     "أخرى" to NutritionConstants.MICRO_GROUP_OTHER
                 )
+                val missingMicroCount = remember(day.items) {
+                    val allTracked = NutritionConstants.MICRO_GROUP_MACROS +
+                        NutritionConstants.MICRO_GROUP_VITAMINS +
+                        NutritionConstants.MICRO_GROUP_MINERALS +
+                        NutritionConstants.MICRO_GROUP_OTHER
+                    allTracked.count { !hasDataFor(it) }
+                }
                 ExpandableSectionCard(
                     title = "الميكروز النهارده (تفصيل كامل للبالغين)",
                     testTag = "daily_micros_card"
                 ) {
+                    if (day.items.isNotEmpty() && (missingMicroCount > 0 || enrichMicrosBusy != null)) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+                            shape = MaterialTheme.shapes.medium,
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "فيه $missingMicroCount عناصر لسه مفيهاش بيانات في أصناف اليوم (أصناف متسجلة قبل تحديث القاعدة أو أكلات مخصصة). استكملها بضغطة واحدة:",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                                if (enrichMicrosBusy != null) {
+                                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                    Text(
+                                        text = enrichMicrosBusy!!,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                } else {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Button(
+                                            onClick = { viewModel.enrichDayLoggedFoods(useGeminiAi = false) },
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                            modifier = Modifier.weight(1f).testTag("enrich_micros_db_button")
+                                        ) {
+                                            Text("⚡ استكمال من القاعدة", style = MaterialTheme.typography.labelMedium)
+                                        }
+                                        OutlinedButton(
+                                            onClick = { viewModel.enrichDayLoggedFoods(useGeminiAi = true) },
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                            modifier = Modifier.weight(1f).testTag("enrich_micros_ai_button")
+                                        ) {
+                                            Text("✨ تحليل بـ Gemini", style = MaterialTheme.typography.labelMedium)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     sections.forEachIndexed { sIdx, (sectionTitle, keys) ->
                         if (sIdx > 0) {
                             Spacer(Modifier.height(10.dp))
@@ -467,7 +573,7 @@ fun NutritionScreen(
                     }
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "الأصناف اللي بتتحلل بـ Gemini بتجيب كل الميكروز كاملة (USDA + الجدول المصري). الأصناف القديمة اللي مفيهاش قيمة لعنصر معين بتتحسب صفر فيه.",
+                        text = "كل الأصناف في قاعدة الأغذية (12,903 صنف — الجدول المصري + USDA + Foundation) والتحليل بـ Gemini بقت بتحسب كل الـ 40 عنصر كاملين تلقائيًا.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -513,6 +619,16 @@ fun NutritionScreen(
                 viewModel.saveMealAsPreset(presetName, mItems)
                 savingPresetMeal = null
             }
+        )
+    }
+
+    if (showFoodBattle) {
+        FoodBattleDialog(
+            searchResultsA = battleResultsA,
+            searchResultsB = battleResultsB,
+            onSearchA = { viewModel.searchFoodBattle(true, it) },
+            onSearchB = { viewModel.searchFoodBattle(false, it) },
+            onDismiss = { showFoodBattle = false }
         )
     }
 

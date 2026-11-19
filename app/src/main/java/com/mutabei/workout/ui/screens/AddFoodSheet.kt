@@ -1,5 +1,10 @@
 package com.mutabei.workout.ui.screens
 
+import android.app.Activity
+import android.content.Intent
+import android.speech.RecognizerIntent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -23,6 +28,7 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarBorder
 import androidx.compose.material3.Button
@@ -84,7 +90,7 @@ private enum class FoodSheetMode(val label: String) {
     FAVORITES("مفضلة"),
     LABEL("ملصق / علبة"),
     MEAL_PHOTO("صورة أكل"),
-    TEXT_AI("وصف"),
+    TEXT_AI("وصف / صوت"),
     BARCODE("باركود"),
     RECIPE("وصفة"),
     MY_FOODS("أكلاتي"),
@@ -469,10 +475,48 @@ fun AddFoodSheet(
                     }
 
                     FoodSheetMode.TEXT_AI -> {
+                        val voiceLauncher = rememberLauncherForActivityResult(
+                            contract = ActivityResultContracts.StartActivityForResult()
+                        ) { res ->
+                            if (res.resultCode == Activity.RESULT_OK) {
+                                val spoken = res.data
+                                    ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                                    ?.firstOrNull()
+                                    ?.trim()
+                                    .orEmpty()
+                                if (spoken.isNotBlank()) {
+                                    mealDescription = spoken
+                                    viewModel.analyzeMealText(spoken)
+                                }
+                            }
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ar-EG")
+                                    putExtra(RecognizerIntent.EXTRA_PROMPT, "قول وجبتك بالمصري (مثال: 200 جرام فراخ و150 جرام رز)")
+                                }
+                                try {
+                                    voiceLauncher.launch(intent)
+                                } catch (_: Exception) {
+                                    viewModel.showToast("التسجيل الصوتي غير مدعوم على هذا الجهاز، اكتب الوصف يدويًا.")
+                                }
+                            },
+                            enabled = aiState.busyMessage == null,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("meal_voice_log_button")
+                        ) {
+                            Icon(Icons.Rounded.Mic, contentDescription = "تسجيل وجبة بالصوت", modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("سجّل وجبتك بالصوت (مصري) 🎤")
+                        }
                         OutlinedTextField(
                             value = mealDescription,
                             onValueChange = { mealDescription = it },
-                            placeholder = { Text("مثال: طبقين كشري كبير مع دقة وشطة، أو سندوتش شاورما فراخ") },
+                            placeholder = { Text("مثال: 200 جرام صدور فراخ مشوية مع 150 جرام رز وسلطة") },
                             minLines = 3,
                             modifier = Modifier.fillMaxWidth().testTag("meal_text_ai_input")
                         )
@@ -483,7 +527,7 @@ fun AddFoodSheet(
                         ) {
                             Icon(Icons.Rounded.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("قدّر الأصناف بالـ Gemini")
+                            Text("قدّر الأصناف والـ40 عنصر بـ Gemini")
                         }
                         if (aiState.detectedItems.isNotEmpty()) {
                             AiDetectedItemsReview(

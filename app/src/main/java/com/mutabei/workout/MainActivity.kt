@@ -97,6 +97,7 @@ import com.mutabei.workout.ui.screens.WorkoutScreen
 import com.mutabei.workout.ui.theme.LocalSemanticColors
 import com.mutabei.workout.ui.theme.MutabeiTheme
 import com.mutabei.workout.ui.viewmodel.AiDeficiencyUiState
+import com.mutabei.workout.ui.viewmodel.AiMacroTetrisUiState
 import com.mutabei.workout.ui.viewmodel.AppDataSnapshot
 import com.mutabei.workout.ui.viewmodel.MainTab
 import com.mutabei.workout.ui.viewmodel.MainViewModel
@@ -198,6 +199,9 @@ private fun MainAppShell(user: FirebaseUser) {
     val microSuggestions by viewModel.microSuggestions.collectAsStateWithLifecycle()
     val deficiencyAi by viewModel.deficiencyAi.collectAsStateWithLifecycle()
     val coachReport by viewModel.coachReport.collectAsStateWithLifecycle()
+    val macroTetrisAi by viewModel.macroTetrisAi.collectAsStateWithLifecycle()
+    val battleResultsA by viewModel.battleResultsA.collectAsStateWithLifecycle()
+    val battleResultsB by viewModel.battleResultsB.collectAsStateWithLifecycle()
 
     val isOnlineFlow = remember(context) { observeNetworkStatus(context) }
     val isOnline by isOnlineFlow.collectAsStateWithLifecycle(initialValue = true)
@@ -424,6 +428,9 @@ private fun MainAppShell(user: FirebaseUser) {
                                         bodyDraft = bodyDraft,
                                         microSuggestions = microSuggestions,
                                         deficiencyAi = deficiencyAi,
+                                        macroTetrisAi = macroTetrisAi,
+                                        battleResultsA = battleResultsA,
+                                        battleResultsB = battleResultsB,
                                         viewModel = viewModel
                                     )
                                 }
@@ -469,6 +476,9 @@ private fun ActiveTabContent(
     bodyDraft: com.mutabei.workout.ui.viewmodel.BodyDraftState,
     microSuggestions: Map<String, List<com.mutabei.workout.data.repository.NutrientFoodSuggestion>>,
     deficiencyAi: AiDeficiencyUiState,
+    macroTetrisAi: AiMacroTetrisUiState,
+    battleResultsA: List<com.mutabei.workout.data.model.FoodItem>,
+    battleResultsB: List<com.mutabei.workout.data.model.FoodItem>,
     viewModel: MainViewModel
 ) {
     when (tab) {
@@ -486,6 +496,9 @@ private fun ActiveTabContent(
             aiState = foodSheetAi,
             microSuggestions = microSuggestions,
             deficiencyAi = deficiencyAi,
+            macroTetrisAi = macroTetrisAi,
+            battleResultsA = battleResultsA,
+            battleResultsB = battleResultsB,
             viewModel = viewModel
         )
 

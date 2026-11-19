@@ -8,6 +8,7 @@ import com.google.firebase.firestore.FirebaseFirestoreException
 import com.mutabei.workout.data.model.AiDeficiencyFixResult
 import com.mutabei.workout.data.model.AiFoodReviewItem
 import com.mutabei.workout.data.model.AiLabelResult
+import com.mutabei.workout.data.model.AiMacroTetrisResult
 import com.mutabei.workout.data.model.AiWeeklyCoachReport
 import com.mutabei.workout.data.model.BodyRecord
 import com.mutabei.workout.data.model.CustomFood
@@ -22,6 +23,7 @@ import com.mutabei.workout.data.model.PortionOption
 import com.mutabei.workout.data.model.RecipeIngredient
 import com.mutabei.workout.data.model.SetEntry
 import com.mutabei.workout.data.model.SplitDay
+import com.mutabei.workout.data.model.SupplementCatalog
 import com.mutabei.workout.data.model.UiState
 import com.mutabei.workout.data.model.UserConfig
 import com.mutabei.workout.data.model.WorkoutDefaults
@@ -146,6 +148,12 @@ data class AiCoachUiState(
     val report: AiWeeklyCoachReport? = null
 )
 
+data class AiMacroTetrisUiState(
+    val busyMessage: String? = null,
+    val errorMessage: String? = null,
+    val result: AiMacroTetrisResult? = null
+)
+
 class MainViewModel(
     private val firestoreRepo: FirestoreRepository,
     private val offlineFoodRepo: OfflineFoodRepository,
@@ -223,6 +231,18 @@ class MainViewModel(
 
     private val _coachReport = MutableStateFlow(AiCoachUiState())
     val coachReport: StateFlow<AiCoachUiState> = _coachReport.asStateFlow()
+
+    private val _macroTetrisAi = MutableStateFlow(AiMacroTetrisUiState())
+    val macroTetrisAi: StateFlow<AiMacroTetrisUiState> = _macroTetrisAi.asStateFlow()
+
+    private val _battleResultsA = MutableStateFlow<List<FoodItem>>(emptyList())
+    val battleResultsA: StateFlow<List<FoodItem>> = _battleResultsA.asStateFlow()
+
+    private val _battleResultsB = MutableStateFlow<List<FoodItem>>(emptyList())
+    val battleResultsB: StateFlow<List<FoodItem>> = _battleResultsB.asStateFlow()
+
+    private val _enrichMicrosBusy = MutableStateFlow<String?>(null)
+    val enrichMicrosBusy: StateFlow<String?> = _enrichMicrosBusy.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -502,7 +522,7 @@ class MainViewModel(
         val date = _selectedNutritionDate.value
         val snap = currentSnapshot()
         val day = snap.nutritionDays[date] ?: NutritionDay(id = date, userId = currentUserId, date = date)
-        val entry = LoggedFoodItem(
+        val rawEntry = LoggedFoodItem(
             id = UUID.randomUUID().toString(),
             name = food.name,
             source = food.source,
@@ -511,6 +531,7 @@ class MainViewModel(
             nutrients = LoggedFoodItem.normalizeNutrients(food.nutrients)
         )
         viewModelScope.launch {
+            val entry = offlineFoodRepo.enrichLoggedItem(rawEntry, snap.customFoods)
             val res = firestoreRepo.saveNutritionDay(currentUserId, day.copy(items = day.items + entry))
             if (res.isSuccess) showToast("اتضافت ${food.name} ✅")
         }
@@ -573,10 +594,97 @@ class MainViewModel(
             return
         }
         val cur = snap.nutritionDays[date] ?: NutritionDay(id = date, userId = currentUserId, date = date)
-        val copied = yDay.items.map { it.copy(id = UUID.randomUUID().toString()) }
         viewModelScope.launch {
+            val copied = yDay.items.map {
+                offlineFoodRepo.enrichLoggedItem(it.copy(id = UUID.randomUUID().toString()), snap.customFoods)
+            }
             val res = firestoreRepo.saveNutritionDay(currentUserId, cur.copy(items = cur.items + copied))
-            if (res.isSuccess) showToast("تم نسخ وجبات أمس ✅")
+            if (res.isSuccess) showToast("تم نسخ وجبات أمس وتحديث الميكروز ✅")
+        }
+    }
+
+    fun enrichDayLoggedFoods(useGeminiAi: Boolean = false) {
+        val date = _selectedNutritionDate.value
+        val snap = currentSnapshot()
+        val day = snap.nutritionDays[date]
+        if (day == null || day.items.isEmpty()) {
+            showToast("مفيش أكل متسجل في اليوم ده.")
+            return
+        }
+        viewModelScope.launch {
+            _enrichMicrosBusy.value = if (useGeminiAi) {
+                "Gemini بيحسب كل الميكروز الناقصة (USDA + الجدول المصري)..."
+            } else {
+                "جاري استكمال الميكروز الناقصة من قاعدة الأغذية..."
+            }
+            try {
+                var updatedItems = day.items
+                var changedCount = 0
+
+                if (useGeminiAi) {
+                    // First enrich supplements & exact matches offline, then ask Gemini for real foods with gaps
+                    val foodsToAskAi = day.items.filter { item ->
+                        !SupplementCatalog.isUnitBasedLoggedItem(item) &&
+                            LoggedFoodItem.normalizeNutrients(item.nutrients).any { it < 0.0 }
+                    }
+                    if (foodsToAskAi.isNotEmpty()) {
+                        val promptText = foodsToAskAi.joinToString("\n") {
+                            "- ${it.name} (${it.grams.roundToInt()} جرام)"
+                        }
+                        val aiRes = geminiRepo.estimateMealFromText(promptText) { stage ->
+                            _enrichMicrosBusy.value = stage
+                        }
+                        val detected = aiRes.getOrNull().orEmpty()
+                        if (detected.isNotEmpty()) {
+                            updatedItems = updatedItems.map { item ->
+                                if (SupplementCatalog.isUnitBasedLoggedItem(item)) {
+                                    offlineFoodRepo.enrichLoggedItem(item, snap.customFoods)
+                                } else {
+                                    val curVec = LoggedFoodItem.normalizeNutrients(item.nutrients)
+                                    if (curVec.none { it < 0.0 }) return@map item
+                                    val normItem = NutritionConstants.normalizeArabic(item.name)
+                                    val match = detected.firstOrNull { d ->
+                                        val na = NutritionConstants.normalizeArabic(d.nameAr)
+                                        val ne = d.nameEn.lowercase()
+                                        (na.isNotBlank() && (normItem.contains(na) || na.contains(normItem))) ||
+                                            (ne.isNotBlank() && item.name.lowercase().contains(ne))
+                                    } ?: detected.getOrNull(foodsToAskAi.indexOfFirst { it.id == item.id })
+                                    if (match != null) {
+                                        val aiVec = NutritionConstants.vectorFromMap(match.fallbackPer100)
+                                        val merged = List(NutritionConstants.NUTRIENT_COUNT) { idx ->
+                                            if (curVec[idx] >= 0.0) curVec[idx] else aiVec[idx]
+                                        }
+                                        val enriched = item.copy(nutrients = merged)
+                                        offlineFoodRepo.enrichLoggedItem(enriched, snap.customFoods)
+                                    } else {
+                                        offlineFoodRepo.enrichLoggedItem(item, snap.customFoods)
+                                    }
+                                }
+                            }
+                        } else {
+                            updatedItems = updatedItems.map { offlineFoodRepo.enrichLoggedItem(it, snap.customFoods) }
+                        }
+                    } else {
+                        updatedItems = updatedItems.map { offlineFoodRepo.enrichLoggedItem(it, snap.customFoods) }
+                    }
+                } else {
+                    updatedItems = day.items.map { offlineFoodRepo.enrichLoggedItem(it, snap.customFoods) }
+                }
+
+                changedCount = updatedItems.zip(day.items).count { (a, b) -> a.nutrients != b.nutrients }
+                if (changedCount > 0) {
+                    val res = firestoreRepo.saveNutritionDay(currentUserId, day.copy(items = updatedItems))
+                    if (res.isSuccess) {
+                        showToast("تم استكمال الميكروز لـ $changedCount أصناف بنجاح ✅")
+                    } else {
+                        showToast("تعذّر حفظ التحديث: ${res.exceptionOrNull()?.localizedMessage ?: ""}")
+                    }
+                } else {
+                    showToast("كل أصناف اليوم مكتملة بالفعل ✅")
+                }
+            } finally {
+                _enrichMicrosBusy.value = null
+            }
         }
     }
 
@@ -584,6 +692,14 @@ class MainViewModel(
         viewModelScope.launch {
             val customFoods = currentSnapshot().customFoods
             _searchResults.value = offlineFoodRepo.search(query, customFoods)
+        }
+    }
+
+    fun searchFoodBattle(slotA: Boolean, query: String) {
+        viewModelScope.launch {
+            val customFoods = currentSnapshot().customFoods
+            val res = offlineFoodRepo.search(query, customFoods, limit = 10)
+            if (slotA) _battleResultsA.value = res else _battleResultsB.value = res
         }
     }
 
@@ -837,6 +953,32 @@ class MainViewModel(
                 },
                 onFailure = { e ->
                     _coachReport.value = AiCoachUiState(errorMessage = e.message ?: "تعذّر إنشاء التقرير.")
+                }
+            )
+        }
+    }
+
+    fun requestMacroTetris(remKcal: Int, remProteinG: Int, remCarbsG: Int, remFatG: Int) {
+        val snap = currentSnapshot()
+        val favNames = snap.customFoods.filter { it.favorite || it.custom }.map { it.name }
+        viewModelScope.launch {
+            _macroTetrisAi.value = AiMacroTetrisUiState(busyMessage = "Gemini بيصمم لك وجبة تقفّل باقي ماكروز النهارده...")
+            val res = geminiRepo.suggestMacroTetrisMeals(
+                remKcal = remKcal.coerceAtLeast(0),
+                remProteinG = remProteinG.coerceAtLeast(0),
+                remCarbsG = remCarbsG.coerceAtLeast(0),
+                remFatG = remFatG.coerceAtLeast(0),
+                goal = snap.config.goal,
+                favoriteNames = favNames
+            ) { stage ->
+                _macroTetrisAi.update { it.copy(busyMessage = stage) }
+            }
+            res.fold(
+                onSuccess = { data ->
+                    _macroTetrisAi.value = AiMacroTetrisUiState(result = data)
+                },
+                onFailure = { e ->
+                    _macroTetrisAi.value = AiMacroTetrisUiState(errorMessage = e.message ?: "تعذّر اقتراح الوجبة.")
                 }
             )
         }

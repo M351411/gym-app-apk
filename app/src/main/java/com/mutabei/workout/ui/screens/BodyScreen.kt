@@ -484,11 +484,46 @@ fun BodyScreen(
                                 }
                             }
 
+                            val emaSeries = remember(points, selectedSpec.key) {
+                                if ((selectedSpec.key == "w" || selectedSpec.key == "f") && points.size >= 2) {
+                                    val alpha = 0.25
+                                    var ema = points.first().second
+                                    points.mapIndexed { idx, (_, v) ->
+                                        ema = if (idx == 0) v else (alpha * v + (1.0 - alpha) * ema)
+                                        ema
+                                    }
+                                } else null
+                            }
+
                             DualLineProgressChart(
                                 primarySeries = points.map { it.second },
+                                secondarySeries = emaSeries,
                                 unitLabel = selectedSpec.unit,
-                                legendText = "${points.size} قياسات"
+                                legendText = if (emaSeries != null) {
+                                    "${points.size} قياسات · الأزرق: الميزان، المتقطع: الاتجاه الحقيقي (Trend EMA)"
+                                } else {
+                                    "${points.size} قياسات"
+                                }
                             )
+
+                            if (emaSeries != null && points.size >= 2) {
+                                val rawLatest = points.last().second
+                                val trendLatest = emaSeries.last()
+                                val diff = rawLatest - trendLatest
+                                Surface(
+                                    shape = MaterialTheme.shapes.small,
+                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = "الاتجاه الحقيقي (Trend): ${fmt1(trendLatest)} ${selectedSpec.unit} · فرق التذبذب اليومي: ${String.format("%+.1f", diff)} ${selectedSpec.unit}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
 
                             if (points.size >= 2) {
                                 val firstVal = points.first().second

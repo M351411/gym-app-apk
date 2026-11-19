@@ -224,4 +224,169 @@ class OfflineFoodRepository(private val appContext: Context) {
                 .map { NutrientFoodSuggestion(it.first, it.second) }
         }
     }
+
+    /**
+     * Backfills missing (< 0.0) micronutrients on an already-logged food or supplement
+     * using SupplementCatalog, exact/fuzzy match in the 40-nutrient offline foods.json,
+     * and a conservative USDA/NIH macro-based fallback for custom/unmatched foods.
+     * Existing measured (>= 0.0) values are always preserved.
+     */
+    suspend fun enrichLoggedItem(
+        item: com.mutabei.workout.data.model.LoggedFoodItem,
+        customFoods: List<CustomFood>
+    ): com.mutabei.workout.data.model.LoggedFoodItem {
+        ensureLoaded()
+        return withContext(Dispatchers.Default) {
+            val count = NutritionConstants.NUTRIENT_COUNT
+            val current = com.mutabei.workout.data.model.LoggedFoodItem.normalizeNutrients(item.nutrients).toMutableList()
+            val normName = NutritionConstants.normalizeArabic(item.name.trim())
+
+            // 1. Check SupplementCatalog first (handles older logged supplements missing e.g. EPA/DHA)
+            val matchedSupp = SupplementCatalog.ALL.firstOrNull { supp ->
+                val sn = NutritionConstants.normalizeArabic(supp.name)
+                sn == normName || normName.contains(sn) || sn.contains(normName) ||
+                    (supp.englishName.isNotBlank() && item.name.contains(supp.englishName.split(" ").take(2).joinToString(" "), ignoreCase = true))
+            }
+            if (matchedSupp != null) {
+                var changed = false
+                for (i in 0 until count) {
+                    val catVal = matchedSupp.nutrients.getOrNull(i) ?: -1.0
+                    if (current[i] < 0.0 && catVal >= 0.0) {
+                        current[i] = catVal
+                        changed = true
+                    }
+                }
+                return@withContext if (changed) item.copy(nutrients = current) else item
+            }
+
+            // Skip generic unit-based supplements (vitamin pills shouldn't get food estimates)
+            if (SupplementCatalog.isUnitBasedLoggedItem(item)) {
+                return@withContext item
+            }
+
+            if (current.none { it < 0.0 }) return@withContext item
+
+            // 2. Try exact match in foods.json, then search match
+            val foods = indexedFoods.orEmpty()
+            val exactMatch = foods.firstOrNull { entry ->
+                entry.item.name.equals(item.name, ignoreCase = true) ||
+                    (entry.arNorm.isNotEmpty() && entry.arNorm == normName) ||
+                    entry.enLower == item.name.trim().lowercase()
+            }?.item ?: search(item.name, customFoods, limit = 5).firstOrNull { cand ->
+                cand.nutrients.count { it >= 0.0 } >= 35
+            }
+
+            var changed = false
+            if (exactMatch != null) {
+                val pIdx = NutritionConstants.NUTRIENT_INDEX["p"] ?: 1
+                val fIdx = NutritionConstants.NUTRIENT_INDEX["f"] ?: 2
+                val curP = current[pIdx].coerceAtLeast(0.0)
+                val curF = current[fIdx].coerceAtLeast(0.0)
+                val matchP = (exactMatch.nutrients.getOrNull(pIdx) ?: 0.0).coerceAtLeast(0.0)
+                val matchF = (exactMatch.nutrients.getOrNull(fIdx) ?: 0.0).coerceAtLeast(0.0)
+                val pRatio = if (curP > 0.5 && matchP > 0.5) (curP / matchP).coerceIn(0.5, 1.8) else 1.0
+                val fRatio = if (curF > 0.5 && matchF > 0.5) (curF / matchF).coerceIn(0.4, 2.0) else 1.0
+                val fatIndices = setOf(6, 7, 8, 32, 35)
+                val leuIdx = NutritionConstants.NUTRIENT_INDEX["leu"] ?: 33
+
+                for (i in 0 until count) {
+                    val mv = exactMatch.nutrients.getOrNull(i) ?: -1.0
+                    if (current[i] < 0.0 && mv >= 0.0) {
+                        val scaled = when {
+                            i == leuIdx -> if (curP <= 0.05) 0.0 else mv * pRatio
+                            i in fatIndices -> if (curF <= 0.05) 0.0 else mv * fRatio
+                            else -> mv
+                        }
+                        current[i] = kotlin.math.round(scaled * 1000.0) / 1000.0
+                        changed = true
+                    }
+                }
+            }
+
+            // 3. Fill any still-missing (< 0.0) slots using conservative USDA macro/name rules
+            if (current.any { it < 0.0 }) {
+                val filled = fillRemainingNutrientsConservatively(item.name, current)
+                if (filled) changed = true
+            }
+
+            if (changed) item.copy(nutrients = current) else item
+        }
+    }
+
+    private fun fillRemainingNutrientsConservatively(name: String, vec: MutableList<Double>): Boolean {
+        var changed = false
+        val lower = NutritionConstants.normalizeArabic(name)
+        val p = vec[1].coerceAtLeast(0.0)
+        val fat = vec[2].coerceAtLeast(0.0)
+        val c = vec[3].coerceAtLeast(0.0)
+
+        fun setIfMissing(key: String, value: Double) {
+            val idx = NutritionConstants.NUTRIENT_INDEX[key] ?: return
+            if (vec[idx] < 0.0) {
+                vec[idx] = kotlin.math.round(value.coerceAtLeast(0.0) * 1000.0) / 1000.0
+                changed = true
+            }
+        }
+
+        val isFish = listOf("سمك", "سلمون", "تونه", "ماكريل", "سردين", "جمبري", "salmon", "tuna", "fish", "shrimp", "sardine", "mackerel").any { lower.contains(it) }
+        val isFattyFish = listOf("سلمون", "ماكريل", "سردين", "رنجة", "salmon", "mackerel", "sardine").any { lower.contains(it) }
+        val isEgg = (lower.contains("بيض") || Regex("\\begg(s)?\\b").containsMatchIn(lower)) && !lower.contains("باذنجان") && !lower.contains("eggplant")
+        val isDairy = listOf("لبن", "حليب", "جبن", "زبادي", "قشطه", "زبده", "واي", "milk", "cheese", "yogurt", "whey", "butter").any { lower.contains(it) }
+        val isMeat = listOf("فراخ", "دجاج", "لحم", "كبده", "كفته", "رومي", "بط", "chicken", "beef", "meat", "turkey", "lamb", "liver", "steak").any { lower.contains(it) }
+        val isAnimal = isFish || isEgg || isDairy || isMeat
+        val isSweet = listOf("سكر", "عسل", "مربي", "كيك", "بسكويت", "بسبوسه", "كنافه", "حلاوه", "شيكولاته", "شوكولاته", "كولا", "بيبسي", "sugar", "honey", "cake", "cookie", "candy", "chocolate", "soda", "cola").any { lower.contains(it) }
+        val isCoffee = listOf("قهوه", "نسكافيه", "اسبريسو", "coffee", "espresso", "latte").any { lower.contains(it) }
+        val isTea = (lower.contains("شاي") || Regex("\\btea\\b").containsMatchIn(lower))
+        val isLeafy = listOf("سبانخ", "ملوخيه", "جرجير", "بقدونس", "خس", "بروكلي", "كرنب", "spinach", "kale", "lettuce", "broccoli").any { lower.contains(it) }
+
+        val leuFrac = when {
+            isDairy -> 0.098
+            isEgg -> 0.086
+            isMeat || isFish -> 0.080
+            else -> 0.070
+        }
+        setIfMissing("leu", if (p <= 0.05) 0.0 else p * leuFrac)
+        setIfMissing("sat", if (fat <= 0.05) 0.0 else fat * (if (isDairy) 0.62 else if (isMeat) 0.35 else if (isFish) 0.22 else 0.16))
+        setIfMissing("mono", if (fat <= 0.05) 0.0 else fat * 0.45)
+        setIfMissing("poly", if (fat <= 0.05) 0.0 else fat * 0.22)
+        setIfMissing("chol", when {
+            !isAnimal -> 0.0
+            isEgg -> 372.0
+            isMeat -> 78.0
+            isFish -> 58.0
+            else -> (fat * 2.5).coerceAtMost(215.0)
+        })
+        setIfMissing("o3", when {
+            isFattyFish -> (fat * 0.16).coerceAtLeast(0.8)
+            isFish -> 0.22
+            isEgg -> 0.08
+            else -> fat * 0.015
+        })
+        val o3Val = vec[NutritionConstants.NUTRIENT_INDEX["o3"] ?: 32].coerceAtLeast(0.0)
+        setIfMissing("epa", when {
+            !isAnimal -> 0.0
+            isFattyFish -> (o3Val * 0.78).coerceAtLeast(0.6)
+            isFish -> (o3Val * 0.72).coerceAtLeast(0.15)
+            isEgg -> 0.04
+            isMeat -> (o3Val * 0.2).coerceAtMost(0.05)
+            else -> 0.0
+        })
+        val sugVal = vec[NutritionConstants.NUTRIENT_INDEX["sug"] ?: 5].coerceAtLeast(0.0)
+        setIfMissing("asug", if (!isSweet) 0.0 else if (sugVal > 0.0) sugVal * 0.8 else c * 0.5)
+        setIfMissing("vK", if (isLeafy) 160.0 else if (isAnimal) 1.5 else 5.0)
+        setIfMissing("mn", if (isAnimal) 0.03 else 0.45)
+        setIfMissing("se", if (isFish) 38.0 else if (isEgg) 30.0 else if (isMeat) 23.0 else if (isDairy) 10.0 else 4.0)
+        setIfMissing("io", if (isFish) 50.0 else if (isEgg) 48.0 else if (isDairy) 32.0 else if (isMeat) 6.5 else 3.0)
+        setIfMissing("cr", if (isLeafy) 6.0 else if (isMeat || isFish) 3.0 else 2.0)
+        setIfMissing("caf", when {
+            isCoffee -> 40.0
+            isTea -> 20.0
+            lower.contains("كولا") || lower.contains("cola") -> 10.0
+            lower.contains("شوكولاته") || lower.contains("شيكولاته") || lower.contains("chocolate") -> 25.0
+            else -> 0.0
+        })
+        setIfMissing("wat", (100.0 - p - fat - c - 1.5).coerceIn(0.0, 99.5))
+
+        return changed
+    }
 }

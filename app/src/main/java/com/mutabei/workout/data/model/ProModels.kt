@@ -20,3 +20,19 @@ data class AiWeeklyCoachReport(
     val attentionNeeded: List<String>,
     val nextWeekActions: List<String>
 )
+
+data class AiMacroTetrisOption(
+    val titleAr: String,
+    val ingredientsAr: List<String>,
+    val kcal: Int,
+    val proteinG: Int,
+    val carbsG: Int,
+    val fatG: Int,
+    val leucineG: Double,
+    val tip: String
+)
+
+data class AiMacroTetrisResult(
+    val summary: String,
+    val options: List<AiMacroTetrisOption>
+)

@@ -67,13 +67,16 @@ import com.mutabei.workout.data.model.SetEntry
 import com.mutabei.workout.data.model.WorkoutDefaults
 import com.mutabei.workout.data.model.shiftIsoDate
 import com.mutabei.workout.data.model.todayIso
+import com.mutabei.workout.ui.components.ConsistencyHeatmapCard
 import com.mutabei.workout.ui.components.DoubleProgressionBanner
 import com.mutabei.workout.ui.components.DualLineProgressChart
 import com.mutabei.workout.ui.components.ExpandableSectionCard
 import com.mutabei.workout.ui.components.MetricProgressBar
+import com.mutabei.workout.ui.components.MuscleRecoveryHeatmapCard
 import com.mutabei.workout.ui.components.MuscleSilhouetteCanvas
 import com.mutabei.workout.ui.components.PersonalRecordBadge
 import com.mutabei.workout.ui.components.PlateCalculatorDialog
+import com.mutabei.workout.ui.components.WorkoutSessionSummaryCard
 import com.mutabei.workout.ui.components.computeDoubleProgression
 import com.mutabei.workout.ui.components.isLivePersonalRecord
 import com.mutabei.workout.ui.theme.LocalSemanticColors
@@ -146,6 +149,16 @@ fun WorkoutScreen(
                         )
                     }
                 }
+            }
+
+            // Live session summary & Tonnage card
+            item(key = "session_summary_$safeDayIdx") {
+                WorkoutSessionSummaryCard(
+                    dayName = currentDay.name,
+                    dayIndex = safeDayIdx,
+                    todaySession = todaySession,
+                    allSessions = snapshot.sessions
+                )
             }
 
             // General warm-up accordion
@@ -275,6 +288,19 @@ fun WorkoutScreen(
                         Text("احفظ الملاحظة")
                     }
                 }
+            }
+
+            // Muscle Recovery Heatmap + Deload Detector
+            item(key = "muscle_recovery_heatmap") {
+                MuscleRecoveryHeatmapCard(snapshot = snapshot)
+            }
+
+            // 12-Week Consistency Heatmap + Streak
+            item(key = "consistency_heatmap") {
+                val proteinTarget = remember(snapshot.config, snapshot.bodyRecords) {
+                    viewModel.computeTargets(snapshot.config, snapshot.bodyRecords)?.proteinG
+                }
+                ConsistencyHeatmapCard(snapshot = snapshot, proteinTargetG = proteinTarget)
             }
 
             // Weekly muscle sets (last 7 days)

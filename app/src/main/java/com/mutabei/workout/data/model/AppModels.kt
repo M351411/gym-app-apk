@@ -769,8 +769,17 @@ data class AiFoodReviewItem(
     val candidates: List<FoodItem>,
     val selectedCandidateIndex: Int // -1 means AI estimate
 ) {
-    fun activeNutrients(): List<Double> =
-        if (selectedCandidateIndex in candidates.indices) candidates[selectedCandidateIndex].nutrients else fallbackVector
+    fun activeNutrients(): List<Double> {
+        val base = if (selectedCandidateIndex in candidates.indices) {
+            candidates[selectedCandidateIndex].nutrients
+        } else {
+            fallbackVector
+        }
+        return List(NutritionConstants.NUTRIENT_COUNT) { idx ->
+            val primary = base.getOrNull(idx) ?: -1.0
+            if (primary >= 0.0) primary else (fallbackVector.getOrNull(idx) ?: -1.0)
+        }
+    }
 
     fun activeName(): String =
         if (selectedCandidateIndex in candidates.indices) candidates[selectedCandidateIndex].name else detectedName

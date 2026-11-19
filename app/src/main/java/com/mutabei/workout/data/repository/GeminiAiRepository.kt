@@ -17,6 +17,8 @@ import com.mutabei.workout.data.model.AiDeficiencyFixResult
 import com.mutabei.workout.data.model.AiDeficiencySuggestion
 import com.mutabei.workout.data.model.AiDetectedFoodRaw
 import com.mutabei.workout.data.model.AiLabelResult
+import com.mutabei.workout.data.model.AiMacroTetrisOption
+import com.mutabei.workout.data.model.AiMacroTetrisResult
 import com.mutabei.workout.data.model.AiWeeklyCoachReport
 import com.mutabei.workout.data.model.BodyRecord
 import com.mutabei.workout.data.model.NutritionConstants
@@ -304,6 +306,36 @@ class GeminiAiRepository {
 
     private val coachPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, weeklyCoachSchema, 0.25f, ThinkingLevel.LOW) }
     private val coachFallback by lazy { buildModel(FALLBACK_MODEL_NAME, weeklyCoachSchema, 0.25f, thinking = null) }
+
+    private val macroTetrisSchema: Schema by lazy {
+        val optionSchema = Schema.obj(
+            properties = mapOf(
+                "title_ar" to Schema.string(description = "Short catchy Arabic meal title"),
+                "ingredients_ar" to Schema.array(
+                    items = Schema.string(),
+                    description = "Exact ingredients with weights in grams in Arabic"
+                ),
+                "kcal" to Schema.integer(description = "Total calories"),
+                "protein_g" to Schema.integer(description = "Total protein in grams"),
+                "carbs_g" to Schema.integer(description = "Total carbs in grams"),
+                "fat_g" to Schema.integer(description = "Total fat in grams"),
+                "leucine_g" to Schema.double(description = "Estimated total leucine in grams"),
+                "tip" to Schema.string(description = "Short practical Egyptian Arabic tip")
+            )
+        )
+        Schema.obj(
+            properties = mapOf(
+                "summary" to Schema.string(description = "One-sentence Arabic intro"),
+                "options" to Schema.array(
+                    items = optionSchema,
+                    description = "2 to 3 distinct Egyptian meal/snack options that match the remaining macros closely"
+                )
+            )
+        )
+    }
+
+    private val macroTetrisPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, macroTetrisSchema, 0.3f, ThinkingLevel.LOW) }
+    private val macroTetrisFallback by lazy { buildModel(FALLBACK_MODEL_NAME, macroTetrisSchema, 0.3f, thinking = null) }
 
     suspend fun parseInBodySheet(
         bitmap: Bitmap,
@@ -698,6 +730,68 @@ class GeminiAiRepository {
             wins = readStrings("wins"),
             attentionNeeded = readStrings("attention_needed"),
             nextWeekActions = readStrings("next_week_actions")
+        )
+    }
+
+    suspend fun suggestMacroTetrisMeals(
+        remKcal: Int,
+        remProteinG: Int,
+        remCarbsG: Int,
+        remFatG: Int,
+        goal: String,
+        favoriteNames: List<String>,
+        onProgress: (String) -> Unit = {}
+    ): Result<AiMacroTetrisResult> = runAiCall {
+        val favHint = if (favoriteNames.isNotEmpty()) {
+            "أكلات المستخدم المفضلة (يمكنك استخدام بعضها لو مناسب): ${favoriteNames.take(10).joinToString("، ")}."
+        } else ""
+        val prompt = """
+            أنت مهندس تغذية رياضية في مصر.
+            المستخدم محتاج يقفل باقي احتياجه اليومي بالظبط:
+            - السعرات المتبقية: $remKcal سعر
+            - البروتين المتبقي: $remProteinG جم
+            - الكارب المتبقي: $remCarbsG جم
+            - الدهون المتبقية: $remFatG جم
+            - الهدف: $goal
+            $favHint
+            صمّم 2 إلى 3 اختيارات وجبات أو سناكس مصرية عملية وسريعة التحضير (مثل: جبنة قريش، بيض، تونة مصفاة، صدور فراخ، زبادي يوناني، شوفان، بطاطا، رز، عيش بلدي، موز، فول، واي بروتين) بحيث كل اختيار يقرب جدًا من السعرات والماكروز المتبقية ويوصل لـ ≥ 2.5 جم ليوسين لو البروتين المتبقي ≥ 25 جم.
+            اكتب الجرامات الدقيقة لكل مكون بالعربي.
+        """.trimIndent()
+
+        val rawText = executeTextJson(
+            prompt = prompt,
+            taskLabel = "تقفيل باقي الماكروز",
+            primaryModel = macroTetrisPrimary,
+            fallbackModel = macroTetrisFallback,
+            onProgress = onProgress
+        )
+        val json = JSONObject(rawText)
+        val arr = json.optJSONArray("options")
+        val opts = mutableListOf<AiMacroTetrisOption>()
+        if (arr != null) {
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val ingArr = o.optJSONArray("ingredients_ar")
+                val ings = if (ingArr != null) {
+                    (0 until ingArr.length()).mapNotNull { j -> ingArr.optString(j, "").trim().takeIf { it.isNotBlank() } }
+                } else emptyList()
+                opts.add(
+                    AiMacroTetrisOption(
+                        titleAr = o.optString("title_ar", "اختيار ${i + 1}").trim(),
+                        ingredientsAr = ings,
+                        kcal = o.optInt("kcal", 0).coerceAtLeast(0),
+                        proteinG = o.optInt("protein_g", 0).coerceAtLeast(0),
+                        carbsG = o.optInt("carbs_g", 0).coerceAtLeast(0),
+                        fatG = o.optInt("fat_g", 0).coerceAtLeast(0),
+                        leucineG = o.optDouble("leucine_g", 0.0).takeIf { !it.isNaN() && it >= 0.0 } ?: 0.0,
+                        tip = o.optString("tip", "").trim()
+                    )
+                )
+            }
+        }
+        AiMacroTetrisResult(
+            summary = json.optString("summary", "اختيارات تقفّل باقي يومك بالظبط:").trim(),
+            options = opts
         )
     }
 
