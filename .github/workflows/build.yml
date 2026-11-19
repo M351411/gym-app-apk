@@ -42,6 +42,23 @@ jobs:
           fi
           keytool -list -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android | grep -E 'SHA1:|SHA256:'
 
+      - name: Prepare google-services.json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            echo "Writing app/google-services.json from GitHub Secret (GOOGLE_SERVICES_JSON)..."
+            printf '%s\n' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+          elif [ -f app/google-services.json ]; then
+            echo "Using existing app/google-services.json in repository..."
+          elif [ -f app/src/debug/google-services.json ]; then
+            echo "Copying app/src/debug/google-services.json to app/google-services.json..."
+            cp app/src/debug/google-services.json app/google-services.json
+          else
+            echo "::error::Missing app/google-services.json! Add its contents as a GitHub Actions Secret named GOOGLE_SERVICES_JSON (Settings -> Secrets and variables -> Actions)."
+            exit 1
+          fi
+
       - name: Build APK
         run: |
           gradle wrapper && chmod +x gradlew
