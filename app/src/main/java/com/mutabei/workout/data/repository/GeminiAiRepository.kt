@@ -11,6 +11,7 @@ import com.google.firebase.ai.type.ThinkingLevel
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
 import com.google.firebase.ai.type.thinkingConfig
+import com.google.firebase.appcheck.FirebaseAppCheck
 import com.mutabei.workout.appCheckInitSummary
 import com.mutabei.workout.data.model.AiDeficiencyFixResult
 import com.mutabei.workout.data.model.AiDeficiencySuggestion
@@ -25,6 +26,7 @@ import com.mutabei.workout.data.model.todayIso
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
@@ -47,6 +49,7 @@ private class GeminiStreamStageException(
     val fallbackSummary: String?,
     val imageKb: Int?,
     val anyTimedOut: Boolean,
+    val appCheckDiag: String? = null,
     cause: Throwable?
 ) : Exception(primarySummary, cause)
 
@@ -852,12 +855,54 @@ class GeminiAiRepository {
         }
 
         val primaryErrLower = primaryAttempt.errorChain.lowercase()
-        val isAuthOrQuotaError = primaryErrLower.contains("403") ||
-            primaryErrLower.contains("429") ||
+        val isAppCheckError = primaryErrLower.contains("app check") ||
+            primaryErrLower.contains("appcheck") ||
+            primaryErrLower.contains("recaptcha") ||
+            primaryErrLower.contains("attestation") ||
+            primaryErrLower.contains("403")
+
+        if (isAppCheckError) {
+            onProgress("$stepPrefix جاري التحقق من توكن App Check وإعادة المحاولة...")
+            val (tokenReady, diag) = probeAppCheckAfterFailure()
+            if (tokenReady) {
+                val retryAttempt = streamJsonAttempt(
+                    model = primaryModel,
+                    modelName = PRIMARY_MODEL_NAME,
+                    requestContent = requestContent,
+                    timeoutMs = PRIMARY_TIMEOUT_MS,
+                    onFirstChunk = { onProgress("$stepPrefix جاري استلام البيانات من Gemini...") }
+                )
+                if (retryAttempt.text != null) {
+                    return retryAttempt.text
+                }
+                throw GeminiStreamStageException(
+                    primaryModel = PRIMARY_MODEL_NAME,
+                    primarySummary = retryAttempt.summary,
+                    fallbackModel = null,
+                    fallbackSummary = null,
+                    imageKb = imageKb,
+                    anyTimedOut = retryAttempt.timedOut,
+                    appCheckDiag = diag,
+                    cause = retryAttempt.error
+                )
+            }
+            throw GeminiStreamStageException(
+                primaryModel = PRIMARY_MODEL_NAME,
+                primarySummary = primaryAttempt.summary,
+                fallbackModel = null,
+                fallbackSummary = null,
+                imageKb = imageKb,
+                anyTimedOut = primaryAttempt.timedOut,
+                appCheckDiag = diag,
+                cause = primaryAttempt.error
+            )
+        }
+
+        val isQuotaError = primaryErrLower.contains("429") ||
             primaryErrLower.contains("quota") ||
             primaryErrLower.contains("resource_exhausted")
 
-        if (isAuthOrQuotaError) {
+        if (isQuotaError) {
             throw GeminiStreamStageException(
                 primaryModel = PRIMARY_MODEL_NAME,
                 primarySummary = primaryAttempt.summary,
@@ -890,6 +935,26 @@ class GeminiAiRepository {
             anyTimedOut = primaryAttempt.timedOut || fallbackAttempt.timedOut,
             cause = fallbackAttempt.error ?: primaryAttempt.error
         )
+    }
+
+    private suspend fun probeAppCheckAfterFailure(): Pair<Boolean, String> = try {
+        val token = withContext(Dispatchers.Main) {
+            withTimeout(12_000L) {
+                FirebaseAppCheck.getInstance().getAppCheckToken(false).await()
+            }
+        }
+        val tLen = token.token.length
+        val expSec = ((token.expireTimeMillis - System.currentTimeMillis()) / 1000L)
+        if (tLen > 20) {
+            true to "tokenOk(len=$tLen, exp=${expSec}s)"
+        } else {
+            false to "tokenEmpty(len=$tLen)"
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.e(TAG, "Post-failure AppCheck diagnostic failed", e)
+        false to unwrapCauseChain(e)
     }
 
     private data class StreamAttemptResult(
@@ -1100,6 +1165,9 @@ class GeminiAiRepository {
                 append("1) ${error.primarySummary}")
                 if (!error.fallbackSummary.isNullOrBlank()) {
                     append("\n2) ${error.fallbackSummary}")
+                }
+                if (!error.appCheckDiag.isNullOrBlank()) {
+                    append("\nAppCheck: ${error.appCheckDiag}")
                 }
             }
             val lower = details.lowercase()
