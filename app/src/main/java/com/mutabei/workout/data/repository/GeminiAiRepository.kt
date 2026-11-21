@@ -11,7 +11,6 @@ import com.google.firebase.ai.type.ThinkingLevel
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
 import com.google.firebase.ai.type.thinkingConfig
-import com.google.firebase.appcheck.FirebaseAppCheck
 import com.mutabei.workout.appCheckInitSummary
 import com.mutabei.workout.data.model.AiDeficiencyFixResult
 import com.mutabei.workout.data.model.AiDeficiencySuggestion
@@ -26,7 +25,6 @@ import com.mutabei.workout.data.model.todayIso
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
@@ -36,28 +34,17 @@ private const val TAG = "GeminiAiRepo"
 private const val PRIMARY_MODEL_NAME = "gemini-3.8-flash"
 private const val FALLBACK_MODEL_NAME = "gemini-3.5-flash-lite"
 
-private const val APP_CHECK_TIMEOUT_MS = 20_000L
-private const val PRIMARY_TIMEOUT_MS = 45_000L
-private const val FALLBACK_TIMEOUT_MS = 30_000L
+private const val PRIMARY_TIMEOUT_MS = 50_000L
+private const val FALLBACK_TIMEOUT_MS = 35_000L
 
 private const val FULL_MICRONUTRIENT_INSTRUCTION =
     "Never return null or skip micronutrients. Always estimate full micronutrient values based on USDA FoodData Central and Egyptian Food Composition Tables for the exact weight provided. Only return 0 if the food genuinely contains zero of that nutrient (e.g., cholesterol in plant foods)."
-
-private class AppCheckStageException(
-    val timedOut: Boolean,
-    val elapsedMs: Long,
-    cause: Throwable? = null
-) : Exception(
-    if (timedOut) "App Check timed out after ${elapsedMs}ms" else (cause?.message ?: "App Check failed"),
-    cause
-)
 
 private class GeminiStreamStageException(
     val primaryModel: String,
     val primarySummary: String,
     val fallbackModel: String?,
     val fallbackSummary: String?,
-    val appCheckMs: Long,
     val imageKb: Int?,
     val anyTimedOut: Boolean,
     cause: Throwable?
@@ -849,21 +836,16 @@ class GeminiAiRepository {
         fallbackModel: GenerativeModel,
         onProgress: (String) -> Unit
     ): String {
-        val stepPrefix = if (imageKb != null) "2/3" else "1/2"
-        val finalPrefix = if (imageKb != null) "3/3" else "2/2"
-
-        onProgress("$stepPrefix التحقق الأمني (App Check)...")
-        val appCheckMs = ensureAppCheckToken()
-
+        val stepPrefix = if (imageKb != null) "2/2" else "1/1"
         val sizeSuffix = if (imageKb != null) " (${imageKb} KB)" else ""
-        onProgress("$finalPrefix جاري قراءة $taskLabel بـ Gemini$sizeSuffix...")
+        onProgress("$stepPrefix جاري تحليل $taskLabel بـ Gemini$sizeSuffix...")
 
         val primaryAttempt = streamJsonAttempt(
             model = primaryModel,
             modelName = PRIMARY_MODEL_NAME,
             requestContent = requestContent,
             timeoutMs = PRIMARY_TIMEOUT_MS,
-            onFirstChunk = { onProgress("$finalPrefix جاري استلام البيانات من Gemini...") }
+            onFirstChunk = { onProgress("$stepPrefix جاري استلام البيانات من Gemini...") }
         )
         if (primaryAttempt.text != null) {
             return primaryAttempt.text
@@ -871,11 +853,9 @@ class GeminiAiRepository {
 
         val primaryErrLower = primaryAttempt.errorChain.lowercase()
         val isAuthOrQuotaError = primaryErrLower.contains("403") ||
-            primaryErrLower.contains("appcheck") ||
-            primaryErrLower.contains("app check") ||
-            primaryErrLower.contains("recaptcha") ||
             primaryErrLower.contains("429") ||
-            primaryErrLower.contains("quota")
+            primaryErrLower.contains("quota") ||
+            primaryErrLower.contains("resource_exhausted")
 
         if (isAuthOrQuotaError) {
             throw GeminiStreamStageException(
@@ -883,20 +863,19 @@ class GeminiAiRepository {
                 primarySummary = primaryAttempt.summary,
                 fallbackModel = null,
                 fallbackSummary = null,
-                appCheckMs = appCheckMs,
                 imageKb = imageKb,
                 anyTimedOut = primaryAttempt.timedOut,
                 cause = primaryAttempt.error
             )
         }
 
-        onProgress("$finalPrefix جاري المحاولة بنموذج Gemini السريع (flash-lite)...")
+        onProgress("$stepPrefix جاري المحاولة بنموذج Gemini السريع (flash-lite)...")
         val fallbackAttempt = streamJsonAttempt(
             model = fallbackModel,
             modelName = FALLBACK_MODEL_NAME,
             requestContent = requestContent,
             timeoutMs = FALLBACK_TIMEOUT_MS,
-            onFirstChunk = { onProgress("$finalPrefix جاري استلام البيانات من Gemini السريع...") }
+            onFirstChunk = { onProgress("$stepPrefix جاري استلام البيانات من Gemini السريع...") }
         )
         if (fallbackAttempt.text != null) {
             return fallbackAttempt.text
@@ -907,35 +886,10 @@ class GeminiAiRepository {
             primarySummary = primaryAttempt.summary,
             fallbackModel = FALLBACK_MODEL_NAME,
             fallbackSummary = fallbackAttempt.summary,
-            appCheckMs = appCheckMs,
             imageKb = imageKb,
             anyTimedOut = primaryAttempt.timedOut || fallbackAttempt.timedOut,
             cause = fallbackAttempt.error ?: primaryAttempt.error
         )
-    }
-
-    private suspend fun ensureAppCheckToken(): Long {
-        val start = System.currentTimeMillis()
-        return try {
-            withContext(Dispatchers.Main) {
-                withTimeout(APP_CHECK_TIMEOUT_MS) {
-                    FirebaseAppCheck.getInstance().getAppCheckToken(false).await()
-                }
-            }
-            val elapsed = System.currentTimeMillis() - start
-            Log.d(TAG, "App Check token ready in ${elapsed}ms ($appCheckInitSummary)")
-            elapsed
-        } catch (e: TimeoutCancellationException) {
-            val elapsed = System.currentTimeMillis() - start
-            Log.e(TAG, "App Check token timed out after ${elapsed}ms ($appCheckInitSummary)", e)
-            throw AppCheckStageException(timedOut = true, elapsedMs = elapsed, cause = e)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val elapsed = System.currentTimeMillis() - start
-            Log.e(TAG, "App Check token failed after ${elapsed}ms ($appCheckInitSummary)", e)
-            throw AppCheckStageException(timedOut = false, elapsedMs = elapsed, cause = e)
-        }
     }
 
     private data class StreamAttemptResult(
@@ -1138,21 +1092,9 @@ class GeminiAiRepository {
             .joinToString(" ← ")
 
     private fun formatAiError(error: Throwable): String {
-        if (error is AppCheckStageException) {
-            val causeText = error.cause?.let { unwrapCauseChain(it) }.orEmpty()
-            val sec = (error.elapsedMs / 1000L).coerceAtLeast(1L)
-            return if (error.timedOut) {
-                "انتهى وقت التحقق الأمني (App Check / reCAPTCHA) بعد $sec ثانية قبل الاتصال بـ Gemini.\n" +
-                    "[Stage=AppCheck-Timeout | init=$appCheckInitSummary | ${error.elapsedMs}ms]"
-            } else {
-                "تعذّر التحقق الأمني (App Check / reCAPTCHA) قبل الاتصال بـ Gemini.\n" +
-                    "[Stage=AppCheck-Error | init=$appCheckInitSummary | ${error.elapsedMs}ms] ($causeText)"
-            }
-        }
-
         if (error is GeminiStreamStageException) {
             val details = buildString {
-                append("[Stage=Gemini | appCheck=${error.appCheckMs}ms")
+                append("[Stage=Gemini")
                 if (error.imageKb != null) append(" | img=${error.imageKb}KB")
                 append(" | init=$appCheckInitSummary]\n")
                 append("1) ${error.primarySummary}")
@@ -1162,6 +1104,9 @@ class GeminiAiRepository {
             }
             val lower = details.lowercase()
             val prefix = when {
+                lower.contains("too many attempts") ->
+                    "وصلت للحد المؤقت لمحاولات التحقق الأمني (App Check). اقفل التطبيق وافتحه تاني أو انتظر دقيقة ثم جرّب."
+
                 lower.contains("403") || lower.contains("appcheck") || lower.contains("app check") || lower.contains("recaptcha") || lower.contains("attestation") ->
                     "رفض الخادم التحقق الأمني (App Check / reCAPTCHA) عند الاتصال بـ Gemini."
 
@@ -1183,6 +1128,9 @@ class GeminiAiRepository {
         val combined = unwrapCauseChain(error)
         val lower = combined.lowercase()
         val friendlyPrefix = when {
+            lower.contains("too many attempts") ->
+                "وصلت للحد المؤقت لمحاولات التحقق الأمني (App Check). اقفل التطبيق وافتحه تاني أو انتظر دقيقة ثم جرّب."
+
             lower.contains("403") || lower.contains("appcheck") || lower.contains("app check") || lower.contains("recaptcha") || lower.contains("attestation") ->
                 "تعذّر التحقق الأمني (App Check / reCAPTCHA) أثناء الاتصال بـ Gemini."
 
@@ -1190,7 +1138,7 @@ class GeminiAiRepository {
                 "تم تجاوز حد الطلبات المؤقت لـ Gemini. انتظر قليلًا ثم جرّب مرة أخرى."
 
             lower.contains("unknownhost") || lower.contains("connect") || lower.contains("network") || lower.contains("socket") ->
-                "مشكلة في اتصال الإنترنت أثناء إرسال الصورة لـ Gemini."
+                "مشكلة في اتصال الإنترنت أثناء الإرسال إلى Gemini."
 
             else ->
                 "تعذّر التحليل بواسطة Gemini."
