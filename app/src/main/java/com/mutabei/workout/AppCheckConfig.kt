@@ -4,8 +4,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import com.google.android.gms.tasks.Task
+import com.google.android.gms.tasks.TaskCompletionSource
+import com.google.android.gms.tasks.Tasks
 import com.google.firebase.FirebaseApp
 import com.google.firebase.appcheck.AppCheckProvider
 import com.google.firebase.appcheck.AppCheckProviderFactory
@@ -13,7 +16,11 @@ import com.google.firebase.appcheck.AppCheckToken
 import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 import com.google.firebase.appcheck.recaptcha.RecaptchaAppCheckProviderFactory
+import java.io.IOException
 import java.security.MessageDigest
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -27,6 +34,15 @@ private const val RECAPTCHA_SITE_KEY_RES = "recaptcha_site_key"
 private val releaseAppCheckInstalled = AtomicBoolean(false)
 private val appCheckTotalCalls = AtomicInteger(0)
 private val appCheckDedupedCalls = AtomicInteger(0)
+private val appCheckResets = AtomicInteger(0)
+private val appCheckErrorHistory = CopyOnWriteArrayList<String>()
+
+private val retryScheduler = Executors.newSingleThreadScheduledExecutor { r ->
+    Thread(r, "appcheck-retry").apply { isDaemon = true }
+}
+
+@Volatile
+private var activeProvider: ResilientAppCheckProvider? = null
 
 @Volatile
 var appCheckInitSummary: String = "uninitialized"
@@ -44,20 +60,45 @@ var appCheckLastError: String? = null
 var appCheckLastSuccess: String? = null
     private set
 
+fun isAppCheckHardServerRejection(): Boolean {
+    val combined = listOfNotNull(appCheckFirstError, appCheckLastError)
+        .joinToString(" ")
+        .lowercase()
+    return combined.contains("code: 400") ||
+        combined.contains("code: 403") ||
+        combined.contains("code: 404") ||
+        combined.contains("app attestation failed") ||
+        combined.contains("invalid_sitekey") ||
+        combined.contains("invalid_keytype") ||
+        combined.contains("invalid_package_name")
+}
+
+/**
+ * Allows an explicit user-triggered Gemini retry to recover from a prior transient network
+ * failure (e.g., SocketException: Connection reset) that tripped the SDK's in-memory RetryManager.
+ * Strictly cooldown-gated so background listeners can never spam Google servers.
+ */
+fun resetAppCheckProviderForUserRetryIfTransient(): Boolean {
+    if (isAppCheckHardServerRejection()) return false
+    return activeProvider?.resetIfTransientAndAllowed() ?: false
+}
+
 fun buildAppCheckDiagnosticSnapshot(): String {
     val parts = mutableListOf<String>()
-    parts += "calls=${appCheckTotalCalls.get()}(dedup=${appCheckDedupedCalls.get()})"
-    appCheckFirstError?.let { parts += "firstErr=$it" }
+    parts += "calls=${appCheckTotalCalls.get()}(dedup=${appCheckDedupedCalls.get()}, rst=${appCheckResets.get()})"
+    if (appCheckErrorHistory.isNotEmpty()) {
+        parts += "errs=[${appCheckErrorHistory.take(3).joinToString(" ; ")}]"
+    }
     val lastErr = appCheckLastError
-    if (lastErr != null && lastErr != appCheckFirstError) {
+    if (lastErr != null && appCheckErrorHistory.none { it == lastErr }) {
         parts += "lastErr=$lastErr"
     }
     appCheckLastSuccess?.let { parts += "lastOk=$it" }
     return parts.joinToString(" | ")
 }
 
-private fun formatAppCheckCauseChain(error: Throwable): String =
-    generateSequence(error) { it.cause }
+private fun formatAppCheckCauseChain(error: Throwable): String {
+    val chain = generateSequence(error) { it.cause }
         .map { t ->
             val cls = t.javaClass.simpleName.ifBlank { "Error" }
             val msg = t.message?.trim().orEmpty()
@@ -66,11 +107,73 @@ private fun formatAppCheckCauseChain(error: Throwable): String =
         .distinct()
         .joinToString(" ← ")
 
-private class DedupDiagnosticAppCheckProvider(
-    private val delegate: AppCheckProvider
+    // Capture the most relevant SDK frame so we know whether Recaptcha SDK or NetworkClient failed.
+    val root = generateSequence(error) { it.cause }.last()
+    val frame = root.stackTrace.firstOrNull { st ->
+        st.className.startsWith("com.google.firebase.appcheck") ||
+            st.className.startsWith("com.google.android.recaptcha")
+    } ?: root.stackTrace.firstOrNull()
+    val loc = frame?.let {
+        val simpleCls = it.className.substringAfterLast('.')
+        " @$simpleCls.${it.methodName}"
+    }.orEmpty()
+    return "$chain$loc"
+}
+
+private fun isTransientNetworkFailure(error: Throwable): Boolean {
+    val hasIoCause = generateSequence(error) { it.cause }.any { it is IOException }
+    if (hasIoCause) return true
+    val lower = formatAppCheckCauseChain(error).lowercase()
+    return lower.contains("socketexception") ||
+        lower.contains("connection reset") ||
+        lower.contains("eofexception") ||
+        lower.contains("connectexception") ||
+        lower.contains("sslexception") ||
+        lower.contains("unknownhost") ||
+        lower.contains("timed out") ||
+        lower.contains("timeout") ||
+        lower.contains("network_error") ||
+        lower.contains("broken pipe")
+}
+
+private fun isRetryManagerLockout(error: Throwable): Boolean {
+    val lower = formatAppCheckCauseChain(error).lowercase()
+    return lower.contains("too many attempts")
+}
+
+private class ResilientAppCheckProvider(
+    private val firebaseApp: FirebaseApp,
+    private val delegateFactory: AppCheckProviderFactory
 ) : AppCheckProvider {
     private val lock = Any()
+    private var delegate: AppCheckProvider = delegateFactory.create(firebaseApp)
     private var inFlight: Task<AppCheckToken>? = null
+    private var lastFailureAtMs: Long = 0L
+    private var lastFailedException: Exception? = null
+    private var lastResetAtMs: Long = 0L
+    private var lastErrorWasTransient: Boolean = false
+
+    fun resetIfTransientAndAllowed(): Boolean {
+        synchronized(lock) {
+            if (!lastErrorWasTransient && appCheckFirstError?.lowercase()?.let {
+                    it.contains("socket") || it.contains("connection reset") || it.contains("io") || it.contains("timeout")
+                } != true
+            ) {
+                return false
+            }
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastResetAtMs < 5_000L) {
+                return false
+            }
+            delegate = delegateFactory.create(firebaseApp)
+            lastResetAtMs = now
+            lastFailureAtMs = 0L
+            lastFailedException = null
+            appCheckResets.incrementAndGet()
+            Log.w(TAG, "Recreated AppCheck provider after transient network failure (resets=${appCheckResets.get()}).")
+            return true
+        }
+    }
 
     override fun getToken(): Task<AppCheckToken> {
         synchronized(lock) {
@@ -79,43 +182,103 @@ private class DedupDiagnosticAppCheckProvider(
                 appCheckDedupedCalls.incrementAndGet()
                 return active
             }
-            val callNum = appCheckTotalCalls.incrementAndGet()
-            val task = delegate.getToken()
-            inFlight = task
-            task.addOnSuccessListener { token ->
+            // Brief 4s cooldown after a failure so background Firestore snapshot listeners
+            // don't rapidly fire back-to-back calls and escalate RetryManager backoff.
+            val now = SystemClock.elapsedRealtime()
+            val recentErr = lastFailedException
+            if (recentErr != null && now - lastFailureAtMs < 4_000L) {
+                appCheckDedupedCalls.incrementAndGet()
+                return Tasks.forException(recentErr)
+            }
+
+            val tcs = TaskCompletionSource<AppCheckToken>()
+            inFlight = tcs.task
+            executeAttempt(tcs, attempt = 1)
+            return tcs.task
+        }
+    }
+
+    private fun executeAttempt(tcs: TaskCompletionSource<AppCheckToken>, attempt: Int) {
+        val currentDelegate = synchronized(lock) { delegate }
+        val callNum = appCheckTotalCalls.incrementAndGet()
+
+        currentDelegate.getToken()
+            .addOnSuccessListener { token ->
                 synchronized(lock) {
-                    if (inFlight === task) inFlight = null
+                    if (inFlight === tcs.task) inFlight = null
+                    lastFailureAtMs = 0L
+                    lastFailedException = null
+                    lastErrorWasTransient = false
                 }
                 val expSec = (token.expireTimeMillis - System.currentTimeMillis()) / 1000L
                 appCheckLastSuccess = "#$callNum(len=${token.token.length}, exp=${expSec}s)"
                 Log.d(TAG, "AppCheck token succeeded: $appCheckLastSuccess")
-            }.addOnFailureListener { e ->
-                synchronized(lock) {
-                    if (inFlight === task) inFlight = null
-                }
-                val chain = formatAppCheckCauseChain(e)
-                if (appCheckFirstError == null) {
-                    appCheckFirstError = "#$callNum: $chain"
-                }
-                appCheckLastError = "#$callNum: $chain"
-                Log.e(TAG, "AppCheck token failed on call#$callNum: $chain", e)
+                tcs.trySetResult(token)
             }
-            return task
-        }
+            .addOnFailureListener { e ->
+                val chain = formatAppCheckCauseChain(e)
+                val entry = "#$callNum: $chain"
+                if (appCheckFirstError == null) {
+                    appCheckFirstError = entry
+                }
+                appCheckLastError = entry
+                if (appCheckErrorHistory.size < 4) {
+                    appCheckErrorHistory.add(entry)
+                }
+                Log.e(TAG, "AppCheck token failed on $entry", e)
+
+                val transient = isTransientNetworkFailure(e)
+                val staleLockoutAfterNetworkErr = isRetryManagerLockout(e) && !isAppCheckHardServerRejection() &&
+                    (lastErrorWasTransient || appCheckFirstError?.lowercase()?.contains("socket") == true ||
+                        appCheckFirstError?.lowercase()?.contains("connection reset") == true)
+
+                val shouldRetryFresh = attempt < 2 && (transient || staleLockoutAfterNetworkErr) && synchronized(lock) {
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lastResetAtMs >= 5_000L) {
+                        delegate = delegateFactory.create(firebaseApp)
+                        lastResetAtMs = now
+                        lastErrorWasTransient = true
+                        appCheckResets.incrementAndGet()
+                        true
+                    } else {
+                        false
+                    }
+                }
+
+                if (shouldRetryFresh) {
+                    Log.w(TAG, "Retrying AppCheck with fresh provider in 1200ms after transient error: $chain")
+                    retryScheduler.schedule(
+                        { executeAttempt(tcs, attempt + 1) },
+                        1_200L,
+                        TimeUnit.MILLISECONDS
+                    )
+                } else {
+                    synchronized(lock) {
+                        if (inFlight === tcs.task) inFlight = null
+                        lastFailureAtMs = SystemClock.elapsedRealtime()
+                        lastFailedException = e
+                        if (transient) lastErrorWasTransient = true
+                    }
+                    tcs.trySetException(e)
+                }
+            }
     }
 }
 
-private class DedupDiagnosticAppCheckProviderFactory(
+private class ResilientAppCheckProviderFactory(
     private val delegateFactory: AppCheckProviderFactory
 ) : AppCheckProviderFactory {
     private val lock = Any()
-    private var cachedProvider: AppCheckProvider? = null
+    private var cachedProvider: ResilientAppCheckProvider? = null
 
     override fun create(firebaseApp: FirebaseApp): AppCheckProvider {
         synchronized(lock) {
-            return cachedProvider ?: DedupDiagnosticAppCheckProvider(
-                delegateFactory.create(firebaseApp)
-            ).also { cachedProvider = it }
+            val existing = cachedProvider
+            if (existing != null) return existing
+            val created = ResilientAppCheckProvider(firebaseApp, delegateFactory)
+            cachedProvider = created
+            activeProvider = created
+            return created
         }
     }
 }
@@ -151,6 +314,10 @@ private fun readSigningSha1Prefix(context: Context): String = try {
 
 fun configureAppCheck(context: Context, intent: Intent?) {
     try {
+        // Avoid stale HttpURLConnection keep-alive socket reuse that can trigger
+        // SocketException: Connection reset inside Firebase App Check's NetworkClient.
+        System.setProperty("http.keepAlive", "false")
+
         val appContext = context.applicationContext ?: context
         if (FirebaseApp.getApps(appContext).isEmpty()) {
             FirebaseApp.initializeApp(appContext)
@@ -176,7 +343,7 @@ fun configureAppCheck(context: Context, intent: Intent?) {
             }
 
             FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                DedupDiagnosticAppCheckProviderFactory(
+                ResilientAppCheckProviderFactory(
                     DebugAppCheckProviderFactory.getInstance()
                 )
             )
@@ -196,7 +363,7 @@ fun configureAppCheck(context: Context, intent: Intent?) {
                 val siteKey = appContext.getString(resId)
                 if (siteKey.isNotBlank()) {
                     FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                        DedupDiagnosticAppCheckProviderFactory(
+                        ResilientAppCheckProviderFactory(
                             RecaptchaAppCheckProviderFactory.getInstance(siteKey)
                         )
                     )

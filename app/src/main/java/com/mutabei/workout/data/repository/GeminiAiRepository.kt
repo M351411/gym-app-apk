@@ -12,9 +12,10 @@ import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
 import com.google.firebase.ai.type.thinkingConfig
 import com.google.firebase.appcheck.FirebaseAppCheck
-import com.mutabei.workout.appCheckFirstError
 import com.mutabei.workout.appCheckInitSummary
 import com.mutabei.workout.buildAppCheckDiagnosticSnapshot
+import com.mutabei.workout.isAppCheckHardServerRejection
+import com.mutabei.workout.resetAppCheckProviderForUserRetryIfTransient
 import com.mutabei.workout.data.model.AiDeficiencyFixResult
 import com.mutabei.workout.data.model.AiDeficiencySuggestion
 import com.mutabei.workout.data.model.AiDetectedFoodRaw
@@ -864,17 +865,13 @@ class GeminiAiRepository {
             primaryErrLower.contains("403")
 
         if (isAppCheckError) {
-            val initialFirstErr = appCheckFirstError?.lowercase().orEmpty()
-            val hardConfigRejection = initialFirstErr.contains("403") ||
-                initialFirstErr.contains("400") ||
-                initialFirstErr.contains("404") ||
-                initialFirstErr.contains("attestation") ||
-                initialFirstErr.contains("invalid")
+            val hardConfigRejection = isAppCheckHardServerRejection()
 
             var tokenReady = false
             var probeDiag: String? = null
             if (!hardConfigRejection) {
-                onProgress("$stepPrefix جاري التحقق من توكن App Check وإعادة المحاولة...")
+                resetAppCheckProviderForUserRetryIfTransient()
+                onProgress("$stepPrefix جاري إعادة محاولة التحقق الأمني (App Check)...")
                 val (ready, diag) = probeAppCheckAfterFailure()
                 tokenReady = ready
                 probeDiag = diag
@@ -1196,6 +1193,9 @@ class GeminiAiRepository {
             }
             val lower = details.lowercase()
             val prefix = when {
+                lower.contains("connection reset") || lower.contains("socketexception") || lower.contains("broken pipe") ->
+                    "الشبكة/الراوتر قطع الاتصال بسيرفر التحقق الأمني من Google (Connection reset). جرّب التبديل بين Wi-Fi وبيانات الهاتف (4G/5G) أو إيقاف أي VPN/مانع إعلانات ثم جرّب تاني."
+
                 lower.contains("too many attempts") ->
                     "وصلت للحد المؤقت لمحاولات التحقق الأمني (App Check). اقفل التطبيق وافتحه تاني أو انتظر دقيقة ثم جرّب."
 
