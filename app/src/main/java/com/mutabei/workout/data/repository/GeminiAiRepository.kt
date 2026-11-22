@@ -41,7 +41,8 @@ private const val TAG = "GeminiAiRepo"
 private const val PRIMARY_MODEL_NAME = "gemini-3.8-flash"
 private const val FALLBACK_MODEL_NAME = "gemini-3.5-flash-lite"
 
-private const val PRIMARY_TIMEOUT_MS = 50_000L
+private const val PRIMARY_TEXT_TIMEOUT_MS = 30_000L
+private const val PRIMARY_IMAGE_TIMEOUT_MS = 55_000L
 private const val FALLBACK_TIMEOUT_MS = 35_000L
 
 private const val FULL_MICRONUTRIENT_INSTRUCTION =
@@ -243,21 +244,21 @@ class GeminiAiRepository {
         systemInstruction = systemPrompt?.let { content { text(it) } }
     )
 
-    // InBody sheets are dense A4 tables + bar graphs: MEDIUM thinking gives much higher OCR completeness.
-    private val inBodyPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, inBodySchema, 0.0f, ThinkingLevel.MEDIUM) }
+    // InBody sheets are dense A4 tables + bar graphs: LOW thinking keeps OCR accurate without stalling.
+    private val inBodyPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, inBodySchema, 0.0f, ThinkingLevel.LOW) }
     private val inBodyFallback by lazy { buildModel(FALLBACK_MODEL_NAME, inBodySchema, 0.0f, thinking = null) }
 
-    private val labelPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, labelSchema, 0.1f, ThinkingLevel.LOW) }
+    private val labelPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, labelSchema, 0.1f, thinking = null) }
     private val labelFallback by lazy { buildModel(FALLBACK_MODEL_NAME, labelSchema, 0.1f, thinking = null) }
 
     private val foodsPrimary by lazy {
-        buildModel(PRIMARY_MODEL_NAME, foodsSchema, 0.1f, ThinkingLevel.LOW, systemPrompt = FULL_MICRONUTRIENT_INSTRUCTION)
+        buildModel(PRIMARY_MODEL_NAME, foodsSchema, 0.1f, thinking = null, systemPrompt = FULL_MICRONUTRIENT_INSTRUCTION)
     }
     private val foodsFallback by lazy {
         buildModel(FALLBACK_MODEL_NAME, foodsSchema, 0.1f, thinking = null, systemPrompt = FULL_MICRONUTRIENT_INSTRUCTION)
     }
 
-    private val barcodePrimary by lazy { buildModel(PRIMARY_MODEL_NAME, barcodeSchema, 0.0f, ThinkingLevel.LOW) }
+    private val barcodePrimary by lazy { buildModel(PRIMARY_MODEL_NAME, barcodeSchema, 0.0f, thinking = null) }
     private val barcodeFallback by lazy { buildModel(FALLBACK_MODEL_NAME, barcodeSchema, 0.0f, thinking = null) }
 
     private val deficiencyFixSchema: Schema by lazy {
@@ -296,10 +297,10 @@ class GeminiAiRepository {
         )
     }
 
-    private val deficiencyPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, deficiencyFixSchema, 0.25f, ThinkingLevel.LOW) }
+    private val deficiencyPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, deficiencyFixSchema, 0.25f, thinking = null) }
     private val deficiencyFallback by lazy { buildModel(FALLBACK_MODEL_NAME, deficiencyFixSchema, 0.25f, thinking = null) }
 
-    private val coachPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, weeklyCoachSchema, 0.25f, ThinkingLevel.LOW) }
+    private val coachPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, weeklyCoachSchema, 0.25f, thinking = null) }
     private val coachFallback by lazy { buildModel(FALLBACK_MODEL_NAME, weeklyCoachSchema, 0.25f, thinking = null) }
 
     private val macroTetrisSchema: Schema by lazy {
@@ -329,7 +330,7 @@ class GeminiAiRepository {
         )
     }
 
-    private val macroTetrisPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, macroTetrisSchema, 0.3f, ThinkingLevel.LOW) }
+    private val macroTetrisPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, macroTetrisSchema, 0.3f, thinking = null) }
     private val macroTetrisFallback by lazy { buildModel(FALLBACK_MODEL_NAME, macroTetrisSchema, 0.3f, thinking = null) }
 
     suspend fun parseInBodySheet(
@@ -846,14 +847,14 @@ class GeminiAiRepository {
     ): String {
         val stepPrefix = if (imageKb != null) "2/2" else "1/1"
         val sizeSuffix = if (imageKb != null) " (${imageKb} KB)" else ""
+        val primaryTimeoutMs = if (imageKb != null) PRIMARY_IMAGE_TIMEOUT_MS else PRIMARY_TEXT_TIMEOUT_MS
         onProgress("$stepPrefix جاري تحليل $taskLabel بـ Gemini$sizeSuffix...")
 
-        val primaryAttempt = streamJsonAttempt(
+        val primaryAttempt = generateJsonAttempt(
             model = primaryModel,
             modelName = PRIMARY_MODEL_NAME,
             requestContent = requestContent,
-            timeoutMs = PRIMARY_TIMEOUT_MS,
-            onFirstChunk = { onProgress("$stepPrefix جاري استلام البيانات من Gemini...") }
+            timeoutMs = primaryTimeoutMs
         )
         if (primaryAttempt.text != null) {
             return primaryAttempt.text
@@ -889,12 +890,11 @@ class GeminiAiRepository {
             }
 
             if (tokenReady) {
-                val retryAttempt = streamJsonAttempt(
+                val retryAttempt = generateJsonAttempt(
                     model = primaryModel,
                     modelName = PRIMARY_MODEL_NAME,
                     requestContent = requestContent,
-                    timeoutMs = PRIMARY_TIMEOUT_MS,
-                    onFirstChunk = { onProgress("$stepPrefix جاري استلام البيانات من Gemini...") }
+                    timeoutMs = primaryTimeoutMs
                 )
                 if (retryAttempt.text != null) {
                     return retryAttempt.text
@@ -939,12 +939,11 @@ class GeminiAiRepository {
         }
 
         onProgress("$stepPrefix جاري المحاولة بنموذج Gemini السريع (flash-lite)...")
-        val fallbackAttempt = streamJsonAttempt(
+        val fallbackAttempt = generateJsonAttempt(
             model = fallbackModel,
             modelName = FALLBACK_MODEL_NAME,
             requestContent = requestContent,
-            timeoutMs = FALLBACK_TIMEOUT_MS,
-            onFirstChunk = { onProgress("$stepPrefix جاري استلام البيانات من Gemini السريع...") }
+            timeoutMs = FALLBACK_TIMEOUT_MS
         )
         if (fallbackAttempt.text != null) {
             return fallbackAttempt.text
@@ -989,35 +988,22 @@ class GeminiAiRepository {
         val summary: String
     )
 
-    private suspend fun streamJsonAttempt(
+    private suspend fun generateJsonAttempt(
         model: GenerativeModel,
         modelName: String,
         requestContent: Content,
-        timeoutMs: Long,
-        onFirstChunk: () -> Unit
+        timeoutMs: Long
     ): StreamAttemptResult {
         val start = System.currentTimeMillis()
-        var chunks = 0
-        var firstChunkMs = -1L
-        val buffer = StringBuilder()
-
         return try {
-            withContext(Dispatchers.IO) {
+            // Use unary generateContent for structured JSON responses (responseSchema):
+            // avoids SSE chunk-splitting JsonDecodingException and mobile-proxy SSE buffering stalls.
+            val response = withContext(Dispatchers.IO) {
                 withTimeout(timeoutMs) {
-                    model.generateContentStream(requestContent).collect { chunk ->
-                        val piece = chunk.text.orEmpty()
-                        if (piece.isNotEmpty()) {
-                            if (chunks == 0) {
-                                firstChunkMs = System.currentTimeMillis() - start
-                                withContext(Dispatchers.Main) { onFirstChunk() }
-                            }
-                            chunks++
-                            buffer.append(piece)
-                        }
-                    }
+                    model.generateContent(requestContent)
                 }
             }
-            val finalText = buffer.toString().trim()
+            val finalText = response.text?.trim().orEmpty()
             if (finalText.isBlank()) {
                 val elapsed = System.currentTimeMillis() - start
                 val err = IllegalStateException("Empty response from $modelName")
@@ -1026,10 +1012,10 @@ class GeminiAiRepository {
                     timedOut = false,
                     error = err,
                     errorChain = err.message.orEmpty(),
-                    summary = "$modelName: empty after ${elapsed}ms (chunks=$chunks)"
+                    summary = "$modelName: empty after ${elapsed}ms"
                 )
             } else {
-                Log.d(TAG, "$modelName succeeded in ${System.currentTimeMillis() - start}ms (ttft=${firstChunkMs}ms, chunks=$chunks, chars=${finalText.length})")
+                Log.d(TAG, "$modelName succeeded in ${System.currentTimeMillis() - start}ms (chars=${finalText.length})")
                 StreamAttemptResult(
                     text = finalText,
                     timedOut = false,
@@ -1040,13 +1026,13 @@ class GeminiAiRepository {
             }
         } catch (e: TimeoutCancellationException) {
             val elapsed = System.currentTimeMillis() - start
-            Log.w(TAG, "$modelName timed out after ${elapsed}ms (chunks=$chunks, chars=${buffer.length})")
+            Log.w(TAG, "$modelName timed out after ${elapsed}ms")
             StreamAttemptResult(
                 text = null,
                 timedOut = true,
                 error = e,
                 errorChain = "TimeoutCancellationException(${timeoutMs / 1000}s)",
-                summary = "$modelName: timeout ${elapsed / 1000}s (chunks=$chunks, chars=${buffer.length})"
+                summary = "$modelName: timeout ${elapsed / 1000}s"
             )
         } catch (e: CancellationException) {
             throw e
@@ -1059,7 +1045,7 @@ class GeminiAiRepository {
                 timedOut = false,
                 error = e,
                 errorChain = chain,
-                summary = "$modelName: ${elapsed / 1000}s, chunks=$chunks, $chain"
+                summary = "$modelName: ${elapsed / 1000}s, $chain"
             )
         }
     }
