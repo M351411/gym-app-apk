@@ -64,6 +64,31 @@ service cloud.firestore {
              isValidTimestamp(data.updatedAt);
     }
 
+    function isValidCoachReport(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.weekNumber is int && data.weekNumber >= 1 && data.weekNumber <= 52 &&
+             data.date is string && data.date.size() >= 8 && data.date.size() <= 16 &&
+             data.overallScore is int && data.overallScore >= 0 && data.overallScore <= 100 &&
+             data.headline is string && data.headline.size() >= 1 && data.headline.size() <= 500 &&
+             data.wins is list && data.wins.size() <= 10 &&
+             data.attentionNeeded is list && data.attentionNeeded.size() <= 10 &&
+             data.nextWeekActions is list && data.nextWeekActions.size() <= 10 &&
+             data.plateaus is list && data.plateaus.size() <= 15 &&
+             data.deloadRecommended is bool &&
+             data.deloadNote is string && data.deloadNote.size() <= 1000 &&
+             data.asymmetryNote is string && data.asymmetryNote.size() <= 1000 &&
+             data.previousPlanReview is string && data.previousPlanReview.size() <= 1000 &&
+             data.suggestedFoods is list && data.suggestedFoods.size() <= 10 &&
+             (data.suggestedFoods.size() == 0 || data.suggestedFoods[0] is map) &&
+             (!('suggestedKcal' in data) || (data.suggestedKcal is int && data.suggestedKcal >= 800 && data.suggestedKcal <= 10000)) &&
+             (!('suggestedProteinG' in data) || (data.suggestedProteinG is int && data.suggestedProteinG >= 30 && data.suggestedProteinG <= 600)) &&
+             (!('suggestedCarbsG' in data) || (data.suggestedCarbsG is int && data.suggestedCarbsG >= 0 && data.suggestedCarbsG <= 1500)) &&
+             (!('suggestedFatG' in data) || (data.suggestedFatG is int && data.suggestedFatG >= 15 && data.suggestedFatG <= 400)) &&
+             (!('suggestedReason' in data) || (data.suggestedReason is string && data.suggestedReason.size() <= 600)) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
     function isValidWorkoutSession(data, userId) {
       return data.userId is string && data.userId == userId &&
              data.date is string && data.date.size() >= 8 && data.date.size() <= 16 &&
@@ -271,6 +296,47 @@ service cloud.firestore {
                          ]);
 
         allow delete: if isOwner(userId) && isValidId(foodId);
+      }
+
+      match /coachReports/{reportId} {
+        allow get: if isOwner(userId) && isValidId(reportId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+                         isValidId(reportId) &&
+                         incoming().keys().hasAll([
+                           'userId', 'weekNumber', 'date', 'overallScore', 'headline',
+                           'wins', 'attentionNeeded', 'nextWeekActions', 'plateaus',
+                           'deloadRecommended', 'deloadNote', 'asymmetryNote',
+                           'previousPlanReview', 'suggestedFoods', 'createdAt', 'updatedAt'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'weekNumber', 'date', 'overallScore', 'headline',
+                           'wins', 'attentionNeeded', 'nextWeekActions', 'plateaus',
+                           'deloadRecommended', 'deloadNote', 'asymmetryNote',
+                           'previousPlanReview', 'suggestedFoods',
+                           'suggestedKcal', 'suggestedProteinG', 'suggestedCarbsG',
+                           'suggestedFatG', 'suggestedReason',
+                           'createdAt', 'updatedAt'
+                         ]) &&
+                         isValidCoachReport(incoming(), userId);
+
+        allow update: if isOwner(userId) &&
+                         isValidId(reportId) &&
+                         isValidCoachReport(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'weekNumber', 'date', 'overallScore', 'headline',
+                           'wins', 'attentionNeeded', 'nextWeekActions', 'plateaus',
+                           'deloadRecommended', 'deloadNote', 'asymmetryNote',
+                           'previousPlanReview', 'suggestedFoods',
+                           'suggestedKcal', 'suggestedProteinG', 'suggestedCarbsG',
+                           'suggestedFatG', 'suggestedReason',
+                           'updatedAt'
+                         ]);
+
+        allow delete: if isOwner(userId) && isValidId(reportId);
       }
     }
   }

@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">متابع التمرين والتغذية</string>
-    <string name="app_header_title">متابع التمرين</string>
+    <string name="app_name">عنتيل المحله</string>
+    <string name="app_header_title">عنتيل المحله</string>
     <string name="nav_workouts">التمرين</string>
     <string name="nav_nutrition">التغذية</string>
     <string name="nav_body">الجسم</string>
     <string name="settings_title">الإعدادات والنسخة الاحتياطية</string>
-    <string name="sign_in_title">متابع التمرين والتغذية</string>
+    <string name="sign_in_title">عنتيل المحله</string>
     <string name="sign_in_subtitle">سجّل دخولك بحساب جوجل لحفظ تمارينك ووجباتك وقياسات الـ InBody سحابيًا، وتفعيل القراءة التلقائية بالكاميرا عبر Gemini.</string>
     <string name="sign_in_google_button">تسجيل الدخول بحساب Google</string>
     <string name="sign_out_button">تسجيل الخروج</string>

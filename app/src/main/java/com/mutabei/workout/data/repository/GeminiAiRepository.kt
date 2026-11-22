@@ -26,7 +26,13 @@ import com.mutabei.workout.data.model.AiMacroTetrisOption
 import com.mutabei.workout.data.model.AiMacroTetrisResult
 import com.mutabei.workout.data.model.AiWeeklyCoachReport
 import com.mutabei.workout.data.model.BodyRecord
+import com.mutabei.workout.data.model.CoachChatMessage
+import com.mutabei.workout.data.model.CoachChatReply
+import com.mutabei.workout.data.model.CoachSuggestedFood
+import com.mutabei.workout.data.model.CoachSuggestedTargets
 import com.mutabei.workout.data.model.NutritionConstants
+import com.mutabei.workout.data.model.PreWorkoutGamePlan
+import com.mutabei.workout.data.model.PreWorkoutTargetExercise
 import com.mutabei.workout.data.model.todayIso
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -285,23 +291,112 @@ class GeminiAiRepository {
         )
     }
 
+    private fun suggestedTargetsSchema(): Schema = Schema.obj(
+        description = "Optional proposed new daily macro targets ONLY if a calorie/macro adjustment is clearly warranted; otherwise null",
+        properties = mapOf(
+            "kcal" to Schema.integer(description = "Proposed daily calories (800..10000)"),
+            "protein_g" to Schema.integer(description = "Proposed daily protein in grams (30..600)"),
+            "carbs_g" to Schema.integer(description = "Proposed daily carbs in grams (0..1500)"),
+            "fat_g" to Schema.integer(description = "Proposed daily fat in grams (15..400)"),
+            "reason" to Schema.string(description = "Short Egyptian Arabic reason for this macro adjustment")
+        ),
+        nullable = true
+    )
+
+    private fun suggestedFoodsSchema(): Schema = Schema.array(
+        items = Schema.obj(
+            properties = mapOf(
+                "name" to Schema.string(description = "Practical Egyptian food name in Arabic"),
+                "grams" to Schema.integer(description = "Recommended serving weight in grams"),
+                "kcal" to Schema.integer(description = "Approximate calories for this serving"),
+                "protein_g" to Schema.integer(description = "Approximate protein in grams"),
+                "carbs_g" to Schema.integer(description = "Approximate carbs in grams"),
+                "fat_g" to Schema.integer(description = "Approximate fat in grams")
+            )
+        ),
+        description = "0 to 3 concrete Egyptian foods/snacks the user can 1-tap add to today's log",
+        nullable = true
+    )
+
     private val weeklyCoachSchema: Schema by lazy {
         Schema.obj(
             properties = mapOf(
                 "overall_score" to Schema.integer(description = "Overall adherence and progression score from 0 to 100"),
                 "headline" to Schema.string(description = "Sharp 1-sentence Egyptian Arabic summary headline"),
+                "previous_plan_review" to Schema.string(description = "1-2 sentences reviewing adherence to last week's saved plan, or empty string if no previous plan exists"),
                 "wins" to Schema.array(items = Schema.string(), description = "2 to 3 concrete wins based on the numbers"),
                 "attention_needed" to Schema.array(items = Schema.string(), description = "2 to 3 concrete bottlenecks or gaps"),
-                "next_week_actions" to Schema.array(items = Schema.string(), description = "3 specific numeric action items for next week")
+                "plateaus" to Schema.array(items = Schema.string(), description = "List of stalled exercises detected from e1RM history + specific fix (empty array if none)"),
+                "deload_recommended" to Schema.boolean(description = "True only if fatigue/volume/plateau/recovery signs justify a deload week"),
+                "deload_note" to Schema.string(description = "Short Egyptian Arabic deload / recovery verdict"),
+                "asymmetry_note" to Schema.string(description = "Short Egyptian Arabic note on InBody right-vs-left arm/leg muscle balance + unilateral fix if >4% gap, or empty string if no segmental data"),
+                "next_week_actions" to Schema.array(items = Schema.string(), description = "3 specific numeric action items for next week"),
+                "suggested_targets" to suggestedTargetsSchema(),
+                "suggested_foods" to suggestedFoodsSchema()
+            ),
+            optionalProperties = listOf("previous_plan_review", "suggested_targets", "suggested_foods")
+        )
+    }
+
+    private val preWorkoutPlanSchema: Schema by lazy {
+        val prItemSchema = Schema.obj(
+            properties = mapOf(
+                "exercise_name" to Schema.string(description = "Exercise name from today's split"),
+                "last_best" to Schema.string(description = "Last recorded top set, e.g. 60 كجم × 8"),
+                "target_weight_reps" to Schema.string(description = "Concrete today target, e.g. 62.5 كجم × 8 أو 60 كجم × 9"),
+                "cue" to Schema.string(description = "Short technical/tempo cue in Egyptian Arabic")
+            )
+        )
+        Schema.obj(
+            properties = mapOf(
+                "readiness_score" to Schema.integer(description = "Today's training readiness score from 0 to 100 based on fuel, water, sodium, recovery"),
+                "fuel_status" to Schema.string(description = "1 short Egyptian Arabic sentence rating today's pre-workout carbs/water/sodium status"),
+                "pre_workout_fuel_tip" to Schema.string(description = "Practical Egyptian pre-workout meal/snack tip 45-90 min before gym"),
+                "hydration_sodium_tip" to Schema.string(description = "Concrete water + salt/electrolyte + caffeine timing tip"),
+                "warmup_focus" to Schema.string(description = "Specific 5-min warmup & ramp-up focus for today's muscles"),
+                "pr_targets" to Schema.array(items = prItemSchema, description = "Top 2 to 4 exercises from today's split with exact progressive overload PR targets"),
+                "caution_note" to Schema.string(description = "Any fatigue/recovery/asymmetry warning for today, or short motivating sign-off")
             )
         )
     }
+
+    private val coachChatSchema: Schema by lazy {
+        Schema.obj(
+            properties = mapOf(
+                "reply_ar" to Schema.string(description = "Clear, friendly, sharp Egyptian Arabic coaching answer grounded strictly in the athlete's real data and attached image if any"),
+                "suggested_targets" to suggestedTargetsSchema(),
+                "suggested_foods" to suggestedFoodsSchema()
+            ),
+            optionalProperties = listOf("suggested_targets", "suggested_foods")
+        )
+    }
+
+    private val coachChatSystemPrompt = """
+        أنت "المدرب الذكي" داخل تطبيق "متابع التمرين" — مدرب كمال أجسام وأخصائي تغذية رياضية مصري محترف معتمد على العلم (Hypertrophy, Progressive Overload, MPS Leucine Threshold, Adaptive TDEE, InBody Segmental Analysis).
+        قواعدك الصارمة:
+        1. كل ردودك باللهجة المصرية المحترمة، عملية، مباشرة، ومبنية على الأرقام الحقيقية الموجودة في ملف اللاعب.
+        2. لما اللاعب يسأل عن بديل تمرين بسبب إصابة/ألم أو زحمة الجيم: اديله بديلين علميين بنفس المسار العضلي وحدد الوزن المبدئي المناسب.
+        3. لما يبعت صورة (منيو مطعم، محتويات تلاجة، أو علبة مكمل): حلّل الصورة بدقة بناءً على باقي سعراته وماكروزه ومكملاته النهارده، واديله اختيار محدد بالجرامات.
+        4. حط suggested_targets بس لو اللاعب طلب تعديل سعرات/ماكروز أو لقيت فعلاً سبب رقمي واضح للتعديل. وإلا خليها null.
+        5. حط suggested_foods (1-3 أكلات مصرية بالجرامات والماكروز) لما تقترح وجبة أو سناك محدد يقدر يضيفه ليوم النهارده بضغطة واحدة.
+        6. استخدم تنسيق بسيط ونقاط واضحة بدون حشو طويل.
+    """.trimIndent()
 
     private val deficiencyPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, deficiencyFixSchema, 0.25f, thinking = null) }
     private val deficiencyFallback by lazy { buildModel(FALLBACK_MODEL_NAME, deficiencyFixSchema, 0.25f, thinking = null) }
 
     private val coachPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, weeklyCoachSchema, 0.25f, thinking = null) }
     private val coachFallback by lazy { buildModel(FALLBACK_MODEL_NAME, weeklyCoachSchema, 0.25f, thinking = null) }
+
+    private val preWorkoutPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, preWorkoutPlanSchema, 0.25f, thinking = null) }
+    private val preWorkoutFallback by lazy { buildModel(FALLBACK_MODEL_NAME, preWorkoutPlanSchema, 0.25f, thinking = null) }
+
+    private val coachChatPrimary by lazy {
+        buildModel(PRIMARY_MODEL_NAME, coachChatSchema, 0.35f, thinking = null, systemPrompt = coachChatSystemPrompt)
+    }
+    private val coachChatFallback by lazy {
+        buildModel(FALLBACK_MODEL_NAME, coachChatSchema, 0.35f, thinking = null, systemPrompt = coachChatSystemPrompt)
+    }
 
     private val macroTetrisSchema: Schema by lazy {
         val optionSchema = Schema.obj(
@@ -696,16 +791,22 @@ class GeminiAiRepository {
         onProgress: (String) -> Unit = {}
     ): Result<AiWeeklyCoachReport> = runAiCall {
         val prompt = """
-            أنت مدرب كمال أجسام وأخصائي تغذية رياضية محترف (معتمد على العلم: Hypertrophy, Progressive Overload, MPS Leucine Threshold, Adaptive TDEE, InBody analysis).
-            اقرأ بيانات اللاعب الحقيقية دي من آخر أسبوع وآخر قياسات InBody بدقة:
+            أنت مدرب كمال أجسام وأخصائي تغذية رياضية محترف (Hypertrophy, Progressive Overload, MPS Leucine Threshold, Adaptive TDEE, InBody Segmental Analysis).
+            اقرأ ملف اللاعب الكامل ده بدقة (التمرين، تاريخ e1RM والـ Plateaus، التغذية والميكروز، الـ InBody وتوازن اليمين واليسار، وخطة الأسبوع الماضي لو موجودة):
             $athleteContextSummary
 
-            اعمل تحليل أسبوعي حاد، عملي، ومباشر جدًا باللهجة المصرية المحترمة، مبني فقط على الأرقام الموجودة:
+            اعمل تقرير أسبوعي شامل، حاد، ومباشر باللهجة المصرية المحترمة مبني فقط على الأرقام:
             - overall_score: تقييم من 0 إلى 100 للأسبوع.
-            - headline: جملة واحدة قوية تلخص حالة الأسبوع.
-            - wins: 2 إلى 3 نقاط قوة حقيقية من أرقامه.
-            - attention_needed: 2 إلى 3 مشاكل أو فجوات حقيقية (حجم عضلة ناقص، نقص مايكرو، ثبات وزن، عدم تناسق يمين/يسار إن وجد).
-            - next_week_actions: 3 خطوات عملية محددة بالأرقام للأسبوع الجاي.
+            - headline: جملة واحدة قوية تلخص الأسبوع.
+            - previous_plan_review: لو فيه "خطة الأسبوع السابق" في البيانات، قيّم في جملة أو اتنين هل اللاعب التزم بيها فعلاً ولا لأ. لو مفيش خطة سابقة رجّع نص فاضي "".
+            - wins: 2 إلى 3 نقاط قوة حقيقية بالأرقام.
+            - attention_needed: 2 إلى 3 فجوات حقيقية (حجم عضلي، بروتين/ليوسين، نقص ميكروز، ماء).
+            - plateaus: اذكر التمارين اللي فيها ثبات (Plateau) في الـ e1RM وسببها وحل عملي لكل واحد (مثلاً: تقليل تكرارات، تغيير نطاق، ميكرولود، أو تبديل زاوية). لو مفيش ثبات رجّع قائمة فاضية [].
+            - deload_recommended + deload_note: هل اللاعب محتاج أسبوع Deload دلوقتي بناءً على حجم المجموعات الأسبوعي وثبات الأوزان ورقم الأسبوع؟ اكتب السبب بوضوح.
+            - asymmetry_note: لو بيانات InBody فيها ذراع/رجل يمين وشمال، احسب الفرق وقول هل ضمن الطبيعي ولا محتاج تمارين أحادية (Unilateral) وبأي تمرين تبدأ بالطرف الأضعف.
+            - next_week_actions: 3 خطوات رقمية محددة جدًا للأسبوع الجاي.
+            - suggested_targets: اقترح سعرات وماكروز جديدة فقط لو فيه داعي حقيقي (مثلاً ثبات وزن غير مقصود، عجز كبير، أو بروتين أقل من 1.8 جم/كجم). وإلا خليها null.
+            - suggested_foods: 1 إلى 3 أكلات مصرية عملية بالجرامات والماكروز تسد أكبر فجوة عند اللاعب (بروتين أو ميكروز).
         """.trimIndent()
 
         val rawText = executeTextJson(
@@ -725,8 +826,187 @@ class GeminiAiRepository {
             headline = json.optString("headline", "ملخص أسبوعك التدريبي والغذائي").trim(),
             wins = readStrings("wins"),
             attentionNeeded = readStrings("attention_needed"),
-            nextWeekActions = readStrings("next_week_actions")
+            nextWeekActions = readStrings("next_week_actions"),
+            plateaus = readStrings("plateaus"),
+            deloadRecommended = json.optBoolean("deload_recommended", false),
+            deloadNote = if (json.isNull("deload_note")) "" else json.optString("deload_note", "").trim(),
+            asymmetryNote = if (json.isNull("asymmetry_note")) "" else json.optString("asymmetry_note", "").trim(),
+            previousPlanReview = if (json.isNull("previous_plan_review")) "" else json.optString("previous_plan_review", "").trim(),
+            suggestedTargets = parseSuggestedTargets(json.optJSONObject("suggested_targets")),
+            suggestedFoods = parseSuggestedFoods(json.optJSONArray("suggested_foods"))
         )
+    }
+
+    suspend fun generatePreWorkoutGamePlan(
+        dayName: String,
+        preWorkoutContext: String,
+        onProgress: (String) -> Unit = {}
+    ): Result<PreWorkoutGamePlan> = runAiCall {
+        val prompt = """
+            أنت مدرب كمال أجسام وأخصائي تغذية رياضية قبل التمرين مباشرة.
+            اللاعب داخل يتمرن النهارده يوم: "$dayName".
+            دي بياناته الحقيقية دلوقتي (أكله وشربه وصوديوم وكافيين النهارده لحد اللحظة دي + آخر أوزان وتكرارات سجلها في تمارين يوم "$dayName"):
+            $preWorkoutContext
+
+            جهّز له "خطة ما قبل التمرين" (Pre-Workout Game Plan) سريعة، حماسية، وعملية جدًا باللهجة المصرية:
+            - readiness_score: درجة الجاهزية من 0 إلى 100 حسب الكارب والماء والصوديوم والاستشفاء.
+            - fuel_status: تقييم سريع في جملة واحدة لوضع الكارب والماء والصوديوم لحد دلوقتي.
+            - pre_workout_fuel_tip: ياكل إيه بالظبط قبل التمرين بـ 45-60 دقيقة (أكل مصري سهل وسريع الامتصاص) حسب الكارب اللي أكله بالفعل.
+            - hydration_sodium_tip: نصيحة دقيقة للماء + رشة الملح/الإلكترولايتس + الكافيين (مع مراعاة لو شرب كافيين بالفعل النهارده).
+            - warmup_focus: خطة تسخين 5 دقائق محددة لمفاصل وعضلات يوم "$dayName".
+            - pr_targets: اختار أهم 2 إلى 4 تمارين من يوم "$dayName" وحدد له لكل تمرين آخر رقم سجله والهدف الدقيق للنهارده (مثلاً زيادة 2.5 كجم أو +1 عدة) مع نصيحة أداء قصيرة.
+            - caution_note: تنبيه مهم لو فيه إجهاد/قلة شرب ماء/عدم تناسق، أو كلمة تحفيز قصيرة.
+        """.trimIndent()
+
+        val rawText = executeTextJson(
+            prompt = prompt,
+            taskLabel = "خطة ما قبل التمرين",
+            primaryModel = preWorkoutPrimary,
+            fallbackModel = preWorkoutFallback,
+            onProgress = onProgress
+        )
+        val json = JSONObject(rawText)
+        val targetsArr = json.optJSONArray("pr_targets")
+        val targets = mutableListOf<PreWorkoutTargetExercise>()
+        if (targetsArr != null) {
+            for (i in 0 until targetsArr.length()) {
+                val o = targetsArr.optJSONObject(i) ?: continue
+                val exName = o.optString("exercise_name", "").trim()
+                if (exName.isBlank()) continue
+                targets.add(
+                    PreWorkoutTargetExercise(
+                        exerciseName = exName,
+                        lastBest = o.optString("last_best", "أول جلسة").trim(),
+                        targetWeightReps = o.optString("target_weight_reps", "").trim(),
+                        cue = o.optString("cue", "").trim()
+                    )
+                )
+            }
+        }
+        PreWorkoutGamePlan(
+            dayName = dayName,
+            readinessScore = json.optInt("readiness_score", 78).coerceIn(0, 100),
+            fuelStatus = json.optString("fuel_status", "").trim(),
+            preWorkoutFuelTip = json.optString("pre_workout_fuel_tip", "").trim(),
+            hydrationSodiumTip = json.optString("hydration_sodium_tip", "").trim(),
+            warmupFocus = json.optString("warmup_focus", "").trim(),
+            prTargets = targets,
+            cautionNote = json.optString("caution_note", "").trim()
+        )
+    }
+
+    suspend fun sendCoachChatMessage(
+        athleteContext: String,
+        history: List<CoachChatMessage>,
+        userMessage: String,
+        attachedBitmap: Bitmap? = null,
+        onProgress: (String) -> Unit = {}
+    ): Result<CoachChatReply> = runAiCall {
+        val jpegBytes = if (attachedBitmap != null) {
+            onProgress("1/2 تجهيز الصورة للمدرب الذكي...")
+            withContext(Dispatchers.IO) {
+                compressBitmapToJpeg(attachedBitmap, highDetail = false)
+            }
+        } else null
+        val imageKb = jpegBytes?.let { (it.size / 1024).coerceAtLeast(1) }
+
+        val contents = mutableListOf<Content>()
+        // Keep last 8 messages for context efficiency while injecting live athlete telemetry on turn 1
+        val recentHistory = history.takeLast(8)
+        if (recentHistory.isEmpty()) {
+            contents.add(
+                content(role = "user") {
+                    if (jpegBytes != null) inlineData(jpegBytes, "image/jpeg")
+                    text(
+                        """
+                        [ملف اللاعب الحقيقي الآن]:
+                        $athleteContext
+
+                        [رسالة اللاعب]:
+                        ${userMessage.ifBlank { "حلّل الصورة دي وقولي أعمل إيه بناءً على أرقامي النهارده." }}
+                        """.trimIndent()
+                    )
+                }
+            )
+        } else {
+            // Anchor live athlete snapshot in a brief synthetic first exchange, then replay history + new turn
+            contents.add(
+                content(role = "user") {
+                    text("[ملف اللاعب المحدّث الآن - اعتمد عليه في كل إجاباتك]:\n$athleteContext")
+                }
+            )
+            contents.add(
+                content(role = "model") {
+                    text("""{"reply_ar":"تمام، قريت ملفك وأرقامك الحالية بدقة وجاهز أساعدك."}""")
+                }
+            )
+            recentHistory.forEach { msg ->
+                if (msg.fromUser) {
+                    val imgTag = if (msg.imageBitmap != null) " [أرفق صورة]" else ""
+                    contents.add(content(role = "user") { text(msg.text + imgTag) })
+                } else {
+                    contents.add(content(role = "model") { text(JSONObject().put("reply_ar", msg.text).toString()) })
+                }
+            }
+            contents.add(
+                content(role = "user") {
+                    if (jpegBytes != null) inlineData(jpegBytes, "image/jpeg")
+                    text(userMessage.ifBlank { "حلّل الصورة دي بناءً على أرقامي النهارده." })
+                }
+            )
+        }
+
+        val rawText = executeWithAppCheckAndFallback(
+            requestContents = contents,
+            taskLabel = if (jpegBytes != null) "الصورة وسؤالك" else "رد المدرب الذكي",
+            imageKb = imageKb,
+            primaryModel = coachChatPrimary,
+            fallbackModel = coachChatFallback,
+            onProgress = onProgress
+        )
+        val json = JSONObject(rawText)
+        CoachChatReply(
+            replyAr = json.optString("reply_ar", "").trim().ifBlank { "حاضر، قولّي تفاصيل أكتر عشان أساعدك بدقة." },
+            suggestedTargets = parseSuggestedTargets(json.optJSONObject("suggested_targets")),
+            suggestedFoods = parseSuggestedFoods(json.optJSONArray("suggested_foods"))
+        )
+    }
+
+    private fun parseSuggestedTargets(obj: JSONObject?): CoachSuggestedTargets? {
+        if (obj == null) return null
+        val kcal = obj.optInt("kcal", 0)
+        val p = obj.optInt("protein_g", 0)
+        val c = obj.optInt("carbs_g", 0)
+        val f = obj.optInt("fat_g", 0)
+        val reason = if (obj.isNull("reason")) "" else obj.optString("reason", "").trim()
+        return CoachSuggestedTargets(
+            kcal = kcal,
+            proteinG = p,
+            carbsG = c,
+            fatG = f,
+            reason = reason
+        ).takeIf { it.isValid() }
+    }
+
+    private fun parseSuggestedFoods(arr: org.json.JSONArray?): List<CoachSuggestedFood> {
+        if (arr == null) return emptyList()
+        val out = mutableListOf<CoachSuggestedFood>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val name = o.optString("name", "").trim()
+            if (name.isBlank()) continue
+            out.add(
+                CoachSuggestedFood(
+                    name = name,
+                    grams = o.optInt("grams", 100).coerceIn(5, 2000),
+                    kcal = o.optInt("kcal", 0).coerceAtLeast(0),
+                    proteinG = o.optInt("protein_g", 0).coerceAtLeast(0),
+                    carbsG = o.optInt("carbs_g", 0).coerceAtLeast(0),
+                    fatG = o.optInt("fat_g", 0).coerceAtLeast(0)
+                )
+            )
+        }
+        return out
     }
 
     suspend fun suggestMacroTetrisMeals(
@@ -810,7 +1090,7 @@ class GeminiAiRepository {
             text(prompt)
         }
         return executeWithAppCheckAndFallback(
-            requestContent = requestContent,
+            requestContents = listOf(requestContent),
             taskLabel = taskLabel,
             imageKb = imageKb,
             primaryModel = primaryModel,
@@ -828,7 +1108,7 @@ class GeminiAiRepository {
     ): String {
         val requestContent = content { text(prompt) }
         return executeWithAppCheckAndFallback(
-            requestContent = requestContent,
+            requestContents = listOf(requestContent),
             taskLabel = taskLabel,
             imageKb = null,
             primaryModel = primaryModel,
@@ -838,7 +1118,7 @@ class GeminiAiRepository {
     }
 
     private suspend fun executeWithAppCheckAndFallback(
-        requestContent: Content,
+        requestContents: List<Content>,
         taskLabel: String,
         imageKb: Int?,
         primaryModel: GenerativeModel,
@@ -853,7 +1133,7 @@ class GeminiAiRepository {
         val primaryAttempt = generateJsonAttempt(
             model = primaryModel,
             modelName = PRIMARY_MODEL_NAME,
-            requestContent = requestContent,
+            requestContents = requestContents,
             timeoutMs = primaryTimeoutMs
         )
         if (primaryAttempt.text != null) {
@@ -893,7 +1173,7 @@ class GeminiAiRepository {
                 val retryAttempt = generateJsonAttempt(
                     model = primaryModel,
                     modelName = PRIMARY_MODEL_NAME,
-                    requestContent = requestContent,
+                    requestContents = requestContents,
                     timeoutMs = primaryTimeoutMs
                 )
                 if (retryAttempt.text != null) {
@@ -942,7 +1222,7 @@ class GeminiAiRepository {
         val fallbackAttempt = generateJsonAttempt(
             model = fallbackModel,
             modelName = FALLBACK_MODEL_NAME,
-            requestContent = requestContent,
+            requestContents = requestContents,
             timeoutMs = FALLBACK_TIMEOUT_MS
         )
         if (fallbackAttempt.text != null) {
@@ -991,7 +1271,7 @@ class GeminiAiRepository {
     private suspend fun generateJsonAttempt(
         model: GenerativeModel,
         modelName: String,
-        requestContent: Content,
+        requestContents: List<Content>,
         timeoutMs: Long
     ): StreamAttemptResult {
         val start = System.currentTimeMillis()
@@ -1000,7 +1280,7 @@ class GeminiAiRepository {
             // avoids SSE chunk-splitting JsonDecodingException and mobile-proxy SSE buffering stalls.
             val response = withContext(Dispatchers.IO) {
                 withTimeout(timeoutMs) {
-                    model.generateContent(requestContent)
+                    model.generateContent(requestContents)
                 }
             }
             val finalText = response.text?.trim().orEmpty()

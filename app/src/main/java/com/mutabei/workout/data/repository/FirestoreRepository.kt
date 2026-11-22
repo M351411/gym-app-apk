@@ -9,6 +9,7 @@ import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.snapshots
 import com.mutabei.workout.R
 import com.mutabei.workout.data.model.BodyRecord
+import com.mutabei.workout.data.model.CoachReportRecord
 import com.mutabei.workout.data.model.CustomFood
 import com.mutabei.workout.data.model.NutritionDay
 import com.mutabei.workout.data.model.UserConfig
@@ -49,6 +50,25 @@ class FirestoreRepository(
                 .map { snapshot -> UserConfig.fromSnapshot(snapshot) ?: UserConfig(userId = userId) }
                 .catch { error ->
                     logStreamErrorIfAuthenticated(error, OperationType.GET, path, userId)
+                    throw error
+                }
+        )
+    }
+
+    fun observeCoachReports(userId: String): Flow<List<CoachReportRecord>> = flow {
+        val path = "users/$userId/coachReports"
+        emitAll(
+            userDoc(userId).collection("coachReports")
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.documents.mapNotNull { CoachReportRecord.fromSnapshot(it) }
+                        .sortedWith(
+                            compareByDescending<CoachReportRecord> { it.date }
+                                .thenByDescending { it.createdAt?.seconds ?: 0L }
+                        )
+                }
+                .catch { error ->
+                    logStreamErrorIfAuthenticated(error, OperationType.LIST, path, userId)
                     throw error
                 }
         )
@@ -134,6 +154,41 @@ class FirestoreRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun saveCoachReport(userId: String, record: CoachReportRecord): Result<String> {
+        val docId = sanitizeDocId(
+            record.id.ifBlank {
+                "w${record.weekNumber}_${record.date}_${UUID.randomUUID().toString().replace("-", "").take(6)}"
+            }
+        )
+        val path = "users/$userId/coachReports/$docId"
+        return try {
+            val uid = requireUserId(userId)
+            val docRef = userDoc(uid).collection("coachReports").document(docId)
+            docRef.set(record.toCreateMap(uid)).await()
+            Result.success(docId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteCoachReport(userId: String, reportId: String): Result<Unit> {
+        val docId = sanitizeDocId(reportId)
+        val path = "users/$userId/coachReports/$docId"
+        return try {
+            val uid = requireUserId(userId)
+            userDoc(uid).collection("coachReports").document(docId).delete().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, path)
             Result.failure(e)
         }
     }

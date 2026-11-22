@@ -86,9 +86,9 @@ import com.mutabei.workout.data.repository.FirestoreRepository
 import com.mutabei.workout.data.repository.GeminiAiRepository
 import com.mutabei.workout.data.repository.OfflineFoodRepository
 import com.mutabei.workout.data.repository.OpenFoodFactsRepository
-import com.mutabei.workout.ui.components.AiWeeklyCoachDialog
 import com.mutabei.workout.ui.components.RestTimerFab
 import com.mutabei.workout.ui.components.RestTimerOverlay
+import com.mutabei.workout.ui.screens.AiCoachHubSheet
 import com.mutabei.workout.ui.screens.AuthScreen
 import com.mutabei.workout.ui.screens.BodyScreen
 import com.mutabei.workout.ui.screens.NutritionScreen
@@ -199,6 +199,8 @@ private fun MainAppShell(user: FirebaseUser) {
     val microSuggestions by viewModel.microSuggestions.collectAsStateWithLifecycle()
     val deficiencyAi by viewModel.deficiencyAi.collectAsStateWithLifecycle()
     val coachReport by viewModel.coachReport.collectAsStateWithLifecycle()
+    val preWorkoutPlan by viewModel.preWorkoutPlan.collectAsStateWithLifecycle()
+    val coachChat by viewModel.coachChat.collectAsStateWithLifecycle()
     val macroTetrisAi by viewModel.macroTetrisAi.collectAsStateWithLifecycle()
     val battleResultsA by viewModel.battleResultsA.collectAsStateWithLifecycle()
     val battleResultsB by viewModel.battleResultsB.collectAsStateWithLifecycle()
@@ -242,11 +244,22 @@ private fun MainAppShell(user: FirebaseUser) {
         }
 
         if (showCoachDialog && snapshot != null) {
-            AiWeeklyCoachDialog(
-                busyMessage = coachReport.busyMessage,
-                errorMessage = coachReport.errorMessage,
-                report = coachReport.report,
-                onGenerate = viewModel::requestWeeklyCoachReport,
+            AiCoachHubSheet(
+                weekNumber = viewModel.computeWeekNumber(snapshot.config.startDate),
+                splitDays = snapshot.config.effectiveSplit(),
+                selectedDayIndex = selectedDayIndex,
+                chatState = coachChat,
+                preWorkoutState = preWorkoutPlan,
+                weeklyState = coachReport,
+                savedReports = snapshot.coachReports,
+                onSendChat = viewModel::sendCoachChatMessage,
+                onClearChat = viewModel::clearCoachChat,
+                onGeneratePreWorkout = viewModel::requestPreWorkoutGamePlan,
+                onGenerateWeeklyReport = viewModel::requestWeeklyCoachReport,
+                onDeleteReport = viewModel::deleteCoachReport,
+                onApplyTargets = viewModel::applyCoachSuggestedTargets,
+                onAddFood = { food -> viewModel.addCoachSuggestedFoodToToday(food) },
+                onShowMessage = viewModel::showToast,
                 onDismiss = { showCoachDialog = false }
             )
         }

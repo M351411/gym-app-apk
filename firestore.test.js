@@ -77,6 +77,7 @@ test("Unauthenticated user cannot read or write any collection", async () => {
   await assertFails(db.collection("users").doc(ALICE_UID).collection("nutritionDays").get());
   await assertFails(db.collection("users").doc(ALICE_UID).collection("bodyRecords").get());
   await assertFails(db.collection("users").doc(ALICE_UID).collection("customFoods").get());
+  await assertFails(db.collection("users").doc(ALICE_UID).collection("coachReports").get());
 });
 
 test("UserConfig: owner create, partial update, cross-user denial, shadow field rejection", async () => {
@@ -336,4 +337,137 @@ test("BodyRecords & CustomFoods: owner CRUD, optional field omission, and valida
   await assertSucceeds(
     aliceDb.collection("users").doc(ALICE_UID).collection("customFoods").get()
   );
+});
+
+test("CoachReports: owner CRUD, optional target fields, bounds, and cross-user isolation", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const created = new Date(Date.now() - 5000);
+
+  const reportRef = aliceDb
+    .collection("users")
+    .doc(ALICE_UID)
+    .collection("coachReports")
+    .doc("w4_2026-11-22");
+
+  // Full payload with optional suggested targets & foods
+  await assertSucceeds(
+    reportRef.set({
+      userId: ALICE_UID,
+      weekNumber: 4,
+      date: "2026-11-22",
+      overallScore: 86,
+      headline: "أسبوع قوي جداً في البروتين وحجم الصدر",
+      wins: ["التزمت بالبروتين 6 أيام", "زودت وزن البنش برس"],
+      attentionNeeded: ["نقص فيتامين د والمغنيسيوم"],
+      nextWeekActions: ["زود 2.5 كجم في السكوات"],
+      plateaus: ["ثبات في الـ Lateral Raise لمدة 3 جلسات"],
+      deloadRecommended: false,
+      deloadNote: "الاستشفاء ممتاز ومش محتاج ديلود دلوقتي.",
+      asymmetryNote: "الذراع اليمين أعلى بـ 2% فقط - ضمن الطبيعي.",
+      previousPlanReview: "نفذت خطة البروتين بنجاح.",
+      suggestedKcal: 2650,
+      suggestedProteinG: 175,
+      suggestedCarbsG: 310,
+      suggestedFatG: 75,
+      suggestedReason: "ثبات الوزن لأسبوعين مع هدف تضخيم نظيف.",
+      suggestedFoods: [
+        { name: "سردين طازج مشوي", grams: 150, kcal: 310, proteinG: 36, carbsG: 0, fatG: 17 },
+      ],
+      createdAt: created,
+      updatedAt: created,
+    })
+  );
+
+  // Minimal payload without optional suggested target fields
+  await assertSucceeds(
+    aliceDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("coachReports")
+      .doc("w3_2026-11-15")
+      .set({
+        userId: ALICE_UID,
+        weekNumber: 3,
+        date: "2026-11-15",
+        overallScore: 78,
+        headline: "أسبوع متوازن",
+        wins: [],
+        attentionNeeded: [],
+        nextWeekActions: [],
+        plateaus: [],
+        deloadRecommended: false,
+        deloadNote: "",
+        asymmetryNote: "",
+        previousPlanReview: "",
+        suggestedFoods: [],
+        createdAt: created,
+        updatedAt: created,
+      })
+  );
+
+  // Owner list succeeds
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("coachReports").get()
+  );
+
+  // Reject explicit id key on create
+  await assertFails(
+    aliceDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("coachReports")
+      .doc("bad_id_key")
+      .set({
+        id: "bad_id_key",
+        userId: ALICE_UID,
+        weekNumber: 4,
+        date: "2026-11-22",
+        overallScore: 80,
+        headline: "Bad",
+        wins: [],
+        attentionNeeded: [],
+        nextWeekActions: [],
+        plateaus: [],
+        deloadRecommended: false,
+        deloadNote: "",
+        asymmetryNote: "",
+        previousPlanReview: "",
+        suggestedFoods: [],
+        createdAt: created,
+        updatedAt: created,
+      })
+  );
+
+  // Reject out-of-bounds score
+  await assertFails(
+    reportRef.update({
+      overallScore: 150,
+      updatedAt: new Date(Date.now() - 1000),
+    })
+  );
+
+  // Reject createdAt mutation
+  await assertFails(
+    reportRef.update({
+      createdAt: new Date(Date.now() - 500),
+      updatedAt: new Date(Date.now() - 500),
+    })
+  );
+
+  // Cross-user access & delete denied
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("coachReports").get()
+  );
+  await assertFails(
+    bobDb
+      .collection("users")
+      .doc(ALICE_UID)
+      .collection("coachReports")
+      .doc("w4_2026-11-22")
+      .delete()
+  );
+
+  // Owner delete succeeds
+  await assertSucceeds(reportRef.delete());
 });

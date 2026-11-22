@@ -120,6 +120,40 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp." }
       },
       "required": ["userId", "name", "source", "barcode", "refusePercent", "favorite", "custom", "nutrients", "portions", "createdAt", "updatedAt"]
+    },
+    "CoachReport": {
+      "title": "AI Weekly Coach Report",
+      "description": "Persisted weekly AI Coach report including score, wins, plateaus, deload & asymmetry notes, adherence review, and optional actionable macro/food proposals.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "weekNumber": { "type": "integer", "description": "Program week number (1..52)." },
+        "date": { "type": "string", "description": "Report generation date YYYY-MM-DD." },
+        "overallScore": { "type": "integer", "description": "Overall weekly adherence/progression score 0..100." },
+        "headline": { "type": "string", "description": "One-sentence Egyptian Arabic summary headline." },
+        "wins": { "type": "array", "description": "Concrete wins list." },
+        "attentionNeeded": { "type": "array", "description": "Bottlenecks or gaps list." },
+        "nextWeekActions": { "type": "array", "description": "Actionable next-week checklist." },
+        "plateaus": { "type": "array", "description": "Detected stalled lifts and fixes." },
+        "deloadRecommended": { "type": "boolean", "description": "Whether a deload week is recommended." },
+        "deloadNote": { "type": "string", "description": "Deload reasoning or fatigue advice." },
+        "asymmetryNote": { "type": "string", "description": "Left vs right segmental lean asymmetry coaching note." },
+        "previousPlanReview": { "type": "string", "description": "Adherence review against the previous saved weekly report." },
+        "suggestedKcal": { "type": "integer", "description": "Optional proposed daily calorie target." },
+        "suggestedProteinG": { "type": "integer", "description": "Optional proposed daily protein target in g." },
+        "suggestedCarbsG": { "type": "integer", "description": "Optional proposed daily carbs target in g." },
+        "suggestedFatG": { "type": "integer", "description": "Optional proposed daily fat target in g." },
+        "suggestedReason": { "type": "string", "description": "Optional explanation for proposed macro change." },
+        "suggestedFoods": { "type": "array", "description": "Optional actionable Egyptian food suggestions [{name, grams, kcal, proteinG, carbsG, fatG}]." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp." }
+      },
+      "required": [
+        "userId", "weekNumber", "date", "overallScore", "headline",
+        "wins", "attentionNeeded", "nextWeekActions", "plateaus",
+        "deloadRecommended", "deloadNote", "asymmetryNote",
+        "previousPlanReview", "suggestedFoods", "createdAt", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -142,6 +176,10 @@
     "/users/{userId}/customFoods/{foodId}": {
       "schema": { "$ref": "#/entities/CustomFood" },
       "description": "Private custom foods, scanned labels, recipes, and favorites."
+    },
+    "/users/{userId}/coachReports/{reportId}": {
+      "schema": { "$ref": "#/entities/CoachReport" },
+      "description": "Private persisted AI Coach weekly reports archive."
     }
   }
 }
