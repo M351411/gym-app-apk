@@ -126,7 +126,7 @@ fun AuthScreen(
                         modifier = Modifier
                             .size(92.dp)
                             .clip(CircleShape)
-                            .background(Color.White),
+                            .background(Color.Black),
                         contentAlignment = Alignment.Center
                     ) {
                         Image(
