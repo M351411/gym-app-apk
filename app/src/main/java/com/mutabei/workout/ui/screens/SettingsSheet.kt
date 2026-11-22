@@ -53,13 +53,22 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
+import android.net.Uri
+import androidx.compose.material.icons.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.VerifiedUser
+import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.firebase.auth.FirebaseUser
+import com.mutabei.workout.BuildConfig
 import com.mutabei.workout.R
 import com.mutabei.workout.data.model.UserConfig
 import com.mutabei.workout.data.model.todayIso
+import com.mutabei.workout.localPhoneDebugToken
+import com.mutabei.workout.resetAppCheckProviderForUserRetry
 import com.mutabei.workout.ui.components.ExpandableSectionCard
 import com.mutabei.workout.ui.util.signOutUser
 import com.mutabei.workout.ui.viewmodel.MainViewModel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -205,6 +214,127 @@ fun SettingsSheet(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
+                }
+            }
+
+            // Personal-device App Check Debug Token card (only on sideloaded debug APKs, never in Release or Preview harness)
+            val phoneDebugToken = if (BuildConfig.DEBUG) localPhoneDebugToken else null
+            if (!phoneDebugToken.isNullOrBlank()) {
+                var verifyBusy by remember { mutableStateOf(false) }
+                var verifyStatus by remember { mutableStateOf<String?>(null) }
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.VerifiedUser,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "تفعيل Gemini على موبايلك الشخصي (مرة واحدة)",
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                        }
+                        Text(
+                            text = "لأن التطبيق مثبّت يدويًا خارج Google Play، انسخ الكود ده وضيفه مرة واحدة في Firebase Console ← App Check ← Apps ← com.mutabei.workout ← Manage debug tokens:",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Surface(
+                            shape = MaterialTheme.shapes.small,
+                            color = MaterialTheme.colorScheme.background,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = phoneDebugToken,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    cm.setPrimaryClip(ClipData.newPlainText("App Check Debug Token", phoneDebugToken))
+                                    viewModel.showToast("تم نسخ التوكن ✅")
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("copy_appcheck_debug_token_button")
+                            ) {
+                                Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("نسخ التوكن")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    val url = "https://console.firebase.google.com/project/gen-lang-client-0923914224/appcheck/apps"
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("open_firebase_appcheck_console_button")
+                            ) {
+                                Icon(Icons.Rounded.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("فتح Firebase")
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    verifyBusy = true
+                                    verifyStatus = "جاري اختبار التوكن مع Firebase..."
+                                    try {
+                                        resetAppCheckProviderForUserRetry()
+                                        val token = FirebaseAppCheck.getInstance().getAppCheckToken(true).await()
+                                        verifyStatus = if (token.token.length > 20) {
+                                            "ممتاز! التوكن متفعل و Gemini جاهز للعمل الآن ✅"
+                                        } else {
+                                            "التوكن غير صالح بعد — تأكد من حفظه في Firebase Console."
+                                        }
+                                    } catch (e: Exception) {
+                                        verifyStatus = "لسا غير مسجل في Firebase Console (${e.message?.take(80).orEmpty()})"
+                                    } finally {
+                                        verifyBusy = false
+                                    }
+                                }
+                            },
+                            enabled = !verifyBusy,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("verify_appcheck_debug_token_button")
+                        ) {
+                            Text(if (verifyBusy) "جاري الفحص..." else "اختبار تفعيل Gemini الآن")
+                        }
+                        if (!verifyStatus.isNullOrBlank()) {
+                            Text(
+                                text = verifyStatus.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (verifyStatus?.contains("✅") == true) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.error
+                                }
+                            )
+                        }
+                    }
                 }
             }
 

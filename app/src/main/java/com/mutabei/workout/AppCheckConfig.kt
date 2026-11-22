@@ -18,6 +18,7 @@ import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 import com.google.firebase.appcheck.recaptcha.RecaptchaAppCheckProviderFactory
 import java.io.IOException
 import java.security.MessageDigest
+import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -31,7 +32,7 @@ private const val DEBUG_STORE_PREFIX = "com.google.firebase.appcheck.debug.store
 private const val DEBUG_SECRET_KEY = "com.google.firebase.appcheck.debug.DEBUG_SECRET"
 private const val RECAPTCHA_SITE_KEY_RES = "recaptcha_site_key"
 
-private val releaseAppCheckInstalled = AtomicBoolean(false)
+private val appCheckInstalled = AtomicBoolean(false)
 private val appCheckTotalCalls = AtomicInteger(0)
 private val appCheckDedupedCalls = AtomicInteger(0)
 private val appCheckResets = AtomicInteger(0)
@@ -46,6 +47,16 @@ private var activeProvider: ResilientAppCheckProvider? = null
 
 @Volatile
 var appCheckInitSummary: String = "uninitialized"
+    private set
+
+/**
+ * Non-null ONLY on sideloaded BuildConfig.DEBUG builds running on a personal device
+ * (when no FIREBASE_APPCHECK_DEBUG_TOKEN was injected via launch intent).
+ * Allows the user to copy their device's debug token from Settings and register it once
+ * in Firebase Console -> App Check -> Manage debug tokens.
+ */
+@Volatile
+var localPhoneDebugToken: String? = null
     private set
 
 @Volatile
@@ -76,11 +87,21 @@ fun isAppCheckHardServerRejection(): Boolean {
 /**
  * Allows an explicit user-triggered Gemini retry to recover from a prior transient network
  * failure (e.g., SocketException: Connection reset) that tripped the SDK's in-memory RetryManager.
- * Strictly cooldown-gated so background listeners can never spam Google servers.
+ * In BuildConfig.DEBUG on a personal phone, also allows resetting after the user registers
+ * their debug token in Firebase Console so they don't need to force-close the app.
  */
-fun resetAppCheckProviderForUserRetryIfTransient(): Boolean {
+fun resetAppCheckProviderForUserRetry(): Boolean {
+    if (BuildConfig.DEBUG && !localPhoneDebugToken.isNullOrBlank()) {
+        return activeProvider?.resetNow(force = true) ?: false
+    }
     if (isAppCheckHardServerRejection()) return false
-    return activeProvider?.resetIfTransientAndAllowed() ?: false
+    return activeProvider?.resetNow(force = false) ?: false
+}
+
+fun clearAppCheckErrorDiagnostics() {
+    appCheckFirstError = null
+    appCheckLastError = null
+    appCheckErrorHistory.clear()
 }
 
 fun buildAppCheckDiagnosticSnapshot(): String {
@@ -107,7 +128,6 @@ private fun formatAppCheckCauseChain(error: Throwable): String {
         .distinct()
         .joinToString(" ← ")
 
-    // Capture the most relevant SDK frame so we know whether Recaptcha SDK or NetworkClient failed.
     val root = generateSequence(error) { it.cause }.last()
     val frame = root.stackTrace.firstOrNull { st ->
         st.className.startsWith("com.google.firebase.appcheck") ||
@@ -153,16 +173,17 @@ private class ResilientAppCheckProvider(
     private var lastResetAtMs: Long = 0L
     private var lastErrorWasTransient: Boolean = false
 
-    fun resetIfTransientAndAllowed(): Boolean {
+    fun resetNow(force: Boolean): Boolean {
         synchronized(lock) {
-            if (!lastErrorWasTransient && appCheckFirstError?.lowercase()?.let {
+            if (!force && !lastErrorWasTransient && appCheckFirstError?.lowercase()?.let {
                     it.contains("socket") || it.contains("connection reset") || it.contains("io") || it.contains("timeout")
                 } != true
             ) {
                 return false
             }
             val now = SystemClock.elapsedRealtime()
-            if (now - lastResetAtMs < 5_000L) {
+            val minGap = if (force) 2_000L else 5_000L
+            if (now - lastResetAtMs < minGap) {
                 return false
             }
             delegate = delegateFactory.create(firebaseApp)
@@ -170,7 +191,10 @@ private class ResilientAppCheckProvider(
             lastFailureAtMs = 0L
             lastFailedException = null
             appCheckResets.incrementAndGet()
-            Log.w(TAG, "Recreated AppCheck provider after transient network failure (resets=${appCheckResets.get()}).")
+            if (force) {
+                clearAppCheckErrorDiagnostics()
+            }
+            Log.w(TAG, "Recreated AppCheck provider (force=$force, resets=${appCheckResets.get()}).")
             return true
         }
     }
@@ -182,8 +206,6 @@ private class ResilientAppCheckProvider(
                 appCheckDedupedCalls.incrementAndGet()
                 return active
             }
-            // Brief 4s cooldown after a failure so background Firestore snapshot listeners
-            // don't rapidly fire back-to-back calls and escalate RetryManager backoff.
             val now = SystemClock.elapsedRealtime()
             val recentErr = lastFailedException
             if (recentErr != null && now - lastFailureAtMs < 4_000L) {
@@ -314,8 +336,7 @@ private fun readSigningSha1Prefix(context: Context): String = try {
 
 fun configureAppCheck(context: Context, intent: Intent?) {
     try {
-        // Avoid stale HttpURLConnection keep-alive socket reuse that can trigger
-        // SocketException: Connection reset inside Firebase App Check's NetworkClient.
+        // Avoid stale HttpURLConnection keep-alive socket reuse inside Firebase App Check's NetworkClient.
         System.setProperty("http.keepAlive", "false")
 
         val appContext = context.applicationContext ?: context
@@ -325,32 +346,50 @@ fun configureAppCheck(context: Context, intent: Intent?) {
 
         if (BuildConfig.DEBUG) {
             val debugToken = intent?.getStringExtra(DEBUG_TOKEN_EXTRA)
+            val persistenceKey = FirebaseApp.getInstance().persistenceKey
+            val prefs = appContext.getSharedPreferences(
+                "$DEBUG_STORE_PREFIX$persistenceKey",
+                Context.MODE_PRIVATE
+            )
 
             if (!debugToken.isNullOrEmpty()) {
-                val persistenceKey = FirebaseApp.getInstance().persistenceKey
-                val prefs = appContext.getSharedPreferences(
-                    "$DEBUG_STORE_PREFIX$persistenceKey",
-                    Context.MODE_PRIVATE
-                )
                 // Synchronous commit() ensures the debug secret is persisted before
                 // DebugAppCheckProviderFactory reads it.
                 prefs.edit()
                     .putString(DEBUG_SECRET_KEY, debugToken)
                     .commit()
-                Log.d(TAG, "App Check debug secret configured successfully.")
+                localPhoneDebugToken = null
+                Log.d(TAG, "App Check debug secret configured from launch Intent.")
             } else {
-                Log.w(TAG, "No debug token found in Intent extra.")
+                // Sideloaded personal-device debug build: ensure a stable per-device UUID exists
+                // and surface it in Settings so the user can register it once in Firebase Console.
+                val existing = prefs.getString(DEBUG_SECRET_KEY, null)
+                val deviceToken = if (!existing.isNullOrBlank()) {
+                    existing
+                } else {
+                    UUID.randomUUID().toString().also { generated ->
+                        prefs.edit()
+                            .putString(DEBUG_SECRET_KEY, generated)
+                            .commit()
+                    }
+                }
+                localPhoneDebugToken = deviceToken
+                Log.d(TAG, "App Check personal-device debug token ready: $deviceToken")
             }
 
-            FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                ResilientAppCheckProviderFactory(
-                    DebugAppCheckProviderFactory.getInstance()
+            if (!appCheckInstalled.get() || !debugToken.isNullOrEmpty()) {
+                FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                    ResilientAppCheckProviderFactory(
+                        DebugAppCheckProviderFactory.getInstance()
+                    )
                 )
-            )
-            appCheckInitSummary = "debug(tokenPresent=${!debugToken.isNullOrEmpty()})"
-            Log.d(TAG, "DebugAppCheckProviderFactory installed.")
+                appCheckInstalled.set(true)
+            }
+            val sha1Prefix = readSigningSha1Prefix(appContext)
+            appCheckInitSummary = "debug(intentToken=${!debugToken.isNullOrEmpty()}, sha1=$sha1Prefix)"
+            Log.d(TAG, "DebugAppCheckProviderFactory installed: $appCheckInitSummary")
         } else {
-            if (releaseAppCheckInstalled.get()) {
+            if (appCheckInstalled.get()) {
                 Log.d(TAG, "RecaptchaAppCheckProviderFactory already installed; skipping reinstall.")
                 return
             }
@@ -367,7 +406,7 @@ fun configureAppCheck(context: Context, intent: Intent?) {
                             RecaptchaAppCheckProviderFactory.getInstance(siteKey)
                         )
                     )
-                    releaseAppCheckInstalled.set(true)
+                    appCheckInstalled.set(true)
                     val opts = FirebaseApp.getInstance().options
                     val proj = opts.projectId.orEmpty()
                     val appSuffix = opts.applicationId.takeLast(6)

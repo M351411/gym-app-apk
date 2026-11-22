@@ -12,10 +12,12 @@ import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
 import com.google.firebase.ai.type.thinkingConfig
 import com.google.firebase.appcheck.FirebaseAppCheck
+import com.mutabei.workout.BuildConfig
 import com.mutabei.workout.appCheckInitSummary
 import com.mutabei.workout.buildAppCheckDiagnosticSnapshot
 import com.mutabei.workout.isAppCheckHardServerRejection
-import com.mutabei.workout.resetAppCheckProviderForUserRetryIfTransient
+import com.mutabei.workout.localPhoneDebugToken
+import com.mutabei.workout.resetAppCheckProviderForUserRetry
 import com.mutabei.workout.data.model.AiDeficiencyFixResult
 import com.mutabei.workout.data.model.AiDeficiencySuggestion
 import com.mutabei.workout.data.model.AiDetectedFoodRaw
@@ -865,12 +867,13 @@ class GeminiAiRepository {
             primaryErrLower.contains("403")
 
         if (isAppCheckError) {
-            val hardConfigRejection = isAppCheckHardServerRejection()
+            val isPersonalDebugBuild = BuildConfig.DEBUG && !localPhoneDebugToken.isNullOrBlank()
+            val hardConfigRejection = isAppCheckHardServerRejection() && !isPersonalDebugBuild
 
             var tokenReady = false
             var probeDiag: String? = null
             if (!hardConfigRejection) {
-                resetAppCheckProviderForUserRetryIfTransient()
+                resetAppCheckProviderForUserRetry()
                 onProgress("$stepPrefix جاري إعادة محاولة التحقق الأمني (App Check)...")
                 val (ready, diag) = probeAppCheckAfterFailure()
                 tokenReady = ready
@@ -1193,6 +1196,10 @@ class GeminiAiRepository {
             }
             val lower = details.lowercase()
             val prefix = when {
+                BuildConfig.DEBUG && !localPhoneDebugToken.isNullOrBlank() &&
+                    (lower.contains("403") || lower.contains("appcheck") || lower.contains("app check") || lower.contains("attestation") || lower.contains("too many attempts")) ->
+                    "لتفعيل Gemini على موبايلك الشخصي: افتح الإعدادات ⚙️ ← انسخ App Check Debug Token ← أضفه مرة واحدة في Firebase Console (App Check → Manage debug tokens) ثم جرّب تاني."
+
                 lower.contains("connection reset") || lower.contains("socketexception") || lower.contains("broken pipe") ->
                     "الشبكة/الراوتر قطع الاتصال بسيرفر التحقق الأمني من Google (Connection reset). جرّب التبديل بين Wi-Fi وبيانات الهاتف (4G/5G) أو إيقاف أي VPN/مانع إعلانات ثم جرّب تاني."
 

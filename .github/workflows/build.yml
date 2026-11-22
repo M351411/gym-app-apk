@@ -5,13 +5,13 @@ on:
   workflow_dispatch:
     inputs:
       build_type:
-        description: "Build variant (release recommended for real phones so Google Sign-In & Gemini work)"
+        description: "Build variant (debug recommended for sideloaded phone with App Check Debug Token; release for Play Store)"
         required: false
-        default: "release"
+        default: "debug"
         type: choice
         options:
-          - release
           - debug
+          - release
 
 jobs:
   build:
@@ -62,14 +62,14 @@ jobs:
       - name: Build APK
         run: |
           gradle wrapper && chmod +x gradlew
-          if [ "${{ inputs.build_type || 'release' }}" = "debug" ]; then
-            ./gradlew assembleDebug
-          else
+          if [ "${{ inputs.build_type || 'debug' }}" = "release" ]; then
             ./gradlew assembleRelease
+          else
+            ./gradlew assembleDebug
           fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-apk
-          path: app/build/outputs/apk/${{ inputs.build_type || 'release' }}/*.apk
+          path: app/build/outputs/apk/${{ inputs.build_type || 'debug' }}/*.apk
