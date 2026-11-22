@@ -12,7 +12,9 @@ import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
 import com.google.firebase.ai.type.thinkingConfig
 import com.google.firebase.appcheck.FirebaseAppCheck
+import com.mutabei.workout.appCheckFirstError
 import com.mutabei.workout.appCheckInitSummary
+import com.mutabei.workout.buildAppCheckDiagnosticSnapshot
 import com.mutabei.workout.data.model.AiDeficiencyFixResult
 import com.mutabei.workout.data.model.AiDeficiencySuggestion
 import com.mutabei.workout.data.model.AiDetectedFoodRaw
@@ -862,8 +864,30 @@ class GeminiAiRepository {
             primaryErrLower.contains("403")
 
         if (isAppCheckError) {
-            onProgress("$stepPrefix جاري التحقق من توكن App Check وإعادة المحاولة...")
-            val (tokenReady, diag) = probeAppCheckAfterFailure()
+            val initialFirstErr = appCheckFirstError?.lowercase().orEmpty()
+            val hardConfigRejection = initialFirstErr.contains("403") ||
+                initialFirstErr.contains("400") ||
+                initialFirstErr.contains("404") ||
+                initialFirstErr.contains("attestation") ||
+                initialFirstErr.contains("invalid")
+
+            var tokenReady = false
+            var probeDiag: String? = null
+            if (!hardConfigRejection) {
+                onProgress("$stepPrefix جاري التحقق من توكن App Check وإعادة المحاولة...")
+                val (ready, diag) = probeAppCheckAfterFailure()
+                tokenReady = ready
+                probeDiag = diag
+            }
+
+            val fullDiag = buildString {
+                append(buildAppCheckDiagnosticSnapshot())
+                if (!probeDiag.isNullOrBlank()) {
+                    append(" | probe=")
+                    append(probeDiag)
+                }
+            }
+
             if (tokenReady) {
                 val retryAttempt = streamJsonAttempt(
                     model = primaryModel,
@@ -882,7 +906,7 @@ class GeminiAiRepository {
                     fallbackSummary = null,
                     imageKb = imageKb,
                     anyTimedOut = retryAttempt.timedOut,
-                    appCheckDiag = diag,
+                    appCheckDiag = fullDiag,
                     cause = retryAttempt.error
                 )
             }
@@ -893,7 +917,7 @@ class GeminiAiRepository {
                 fallbackSummary = null,
                 imageKb = imageKb,
                 anyTimedOut = primaryAttempt.timedOut,
-                appCheckDiag = diag,
+                appCheckDiag = fullDiag,
                 cause = primaryAttempt.error
             )
         }
