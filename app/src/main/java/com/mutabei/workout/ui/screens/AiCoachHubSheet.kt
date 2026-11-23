@@ -79,10 +79,23 @@ import com.mutabei.workout.data.model.SplitDay
 import com.mutabei.workout.ui.components.CoachActionProposalsSection
 import com.mutabei.workout.ui.components.CoachAnalysisAndPlanTab
 import com.mutabei.workout.ui.components.CoachArchiveTab
+import com.mutabei.workout.ui.components.CoachAutoLoggedSection
+import com.mutabei.workout.ui.theme.LocalSemanticColors
 import com.mutabei.workout.ui.util.rememberImageCaptureController
 import com.mutabei.workout.ui.viewmodel.AiCoachChatUiState
 import com.mutabei.workout.ui.viewmodel.AiCoachUiState
 import com.mutabei.workout.ui.viewmodel.AiPreWorkoutUiState
+
+data class CoachTodayMacroStatus(
+    val targetKcal: Int,
+    val targetProteinG: Int,
+    val targetCarbsG: Int,
+    val targetFatG: Int,
+    val consumedKcal: Int,
+    val consumedProteinG: Int,
+    val consumedCarbsG: Int,
+    val consumedFatG: Int
+)
 
 private val QUICK_CHAT_PROMPTS = listOf(
     "بديل تمرين بسبب ألم في الكتف" to "عندي وجع بسيط في كتفي النهارده، إيه أفضل بديلين آمنين لتمارين الدفع في جدولي الحالي؟",
@@ -98,12 +111,15 @@ fun AiCoachHubSheet(
     weekNumber: Int,
     splitDays: List<SplitDay>,
     selectedDayIndex: Int,
+    todayMacros: CoachTodayMacroStatus?,
     chatState: AiCoachChatUiState,
     preWorkoutState: AiPreWorkoutUiState,
     weeklyState: AiCoachUiState,
     savedReports: List<CoachReportRecord>,
     onSendChat: (String, Bitmap?) -> Unit,
     onClearChat: () -> Unit,
+    onUndoAutoLoggedFood: (String, String) -> Unit,
+    onMoveAutoLoggedFoodMeal: (String, String, Int) -> Unit,
     onGeneratePreWorkout: (Int) -> Unit,
     onGenerateWeeklyReport: () -> Unit,
     onDeleteReport: (String) -> Unit,
@@ -240,8 +256,11 @@ fun AiCoachHubSheet(
                 ) {
                     when (activeTab) {
                         0 -> CoachChatTab(
+                            todayMacros = todayMacros,
                             chatState = chatState,
                             onSend = onSendChat,
+                            onUndoAutoLoggedFood = onUndoAutoLoggedFood,
+                            onMoveAutoLoggedFoodMeal = onMoveAutoLoggedFoodMeal,
                             onApplyTargets = onApplyTargets,
                             onAddFood = onAddFood,
                             onPhotoError = onShowMessage
@@ -273,9 +292,78 @@ fun AiCoachHubSheet(
 }
 
 @Composable
+private fun LiveRemainingMacrosStrip(
+    status: CoachTodayMacroStatus,
+    modifier: Modifier = Modifier
+) {
+    val semantic = LocalSemanticColors.current
+    val remKcal = status.targetKcal - status.consumedKcal
+    val remP = status.targetProteinG - status.consumedProteinG
+    val remC = status.targetCarbsG - status.consumedCarbsG
+    val remF = status.targetFatG - status.consumedFatG
+    val overKcal = remKcal < 0
+    val kcalAccent = if (overKcal) semantic.low else semantic.ok
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("coach_live_remaining_strip")
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = if (overKcal) "زيادة اليوم:" else "المتبقي اليوم:",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (overKcal) "+${-remKcal} سعر" else "$remKcal سعر",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = kcalAccent
+                    )
+                    Text(
+                        text = "· ب ${remP}جم",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (remP > 0) MaterialTheme.colorScheme.primary else semantic.ok
+                    )
+                    Text(
+                        text = "· ك ${remC}جم",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "· د ${remF}جم",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        }
+    }
+}
+
+@Composable
 private fun CoachChatTab(
+    todayMacros: CoachTodayMacroStatus?,
     chatState: AiCoachChatUiState,
     onSend: (String, Bitmap?) -> Unit,
+    onUndoAutoLoggedFood: (String, String) -> Unit,
+    onMoveAutoLoggedFoodMeal: (String, String, Int) -> Unit,
     onApplyTargets: (CoachSuggestedTargets) -> Unit,
     onAddFood: (CoachSuggestedFood) -> Unit,
     onPhotoError: (String) -> Unit
@@ -301,13 +389,17 @@ private fun CoachChatTab(
             .fillMaxSize()
             .imePadding()
     ) {
+        if (todayMacros != null) {
+            LiveRemainingMacrosStrip(status = todayMacros)
+        }
+
         if (chatState.messages.isEmpty() && chatState.busyMessage == null) {
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 20.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                    .padding(horizontal = 16.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Surface(
                     color = MaterialTheme.colorScheme.surface,
@@ -319,12 +411,12 @@ private fun CoachChatTab(
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
-                            text = "أهلاً يا بطل! اسألني أي سؤال عن تمرينك أو أكلك 💪",
+                            text = "أهلاً يا بطل! اسألني أو سجّل أكلك بالكلام 💪",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "أنا شايف جدولك وأوزانك وأكل النهارده وآخر InBody — وتقدر تبعتلي صورة منيو مطعم، تلاجة، أو مكمل من الصيدلية وهقولك تعمل إيه بالظبط.",
+                            text = "لو لخبطت أو مش عارف سعرات وجبة (كشري، شاورما، أكل بيت، عزومة) — اوصفها لي أو صوّرها وهحسبها وأضيفها ليوم النهارده تلقائياً وأقولك متبقيلك كام بالظبط!",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -332,13 +424,34 @@ private fun CoachChatTab(
                 }
 
                 Text(
-                    text = "أسئلة سريعة تبدأ بيها:",
+                    text = "ابدأ بسرعة:",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AssistChip(
+                        onClick = {
+                            inputText = "لخبطت وأكلت النهارده: "
+                        },
+                        label = {
+                            Text(
+                                "لخبطت / سجّل وجبة مش عارف سعراتها",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Rounded.AutoAwesome,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        modifier = Modifier.testTag("coach_quick_log_meal_chip")
+                    )
                     QUICK_CHAT_PROMPTS.forEachIndexed { idx, (label, prompt) ->
                         AssistChip(
                             onClick = { onSend(prompt, null) },
@@ -367,6 +480,8 @@ private fun CoachChatTab(
                 items(chatState.messages, key = { it.id }) { msg ->
                     ChatMessageBubble(
                         message = msg,
+                        onUndoAutoLoggedFood = { itemId -> onUndoAutoLoggedFood(msg.id, itemId) },
+                        onMoveAutoLoggedFoodMeal = { itemId, newSlot -> onMoveAutoLoggedFoodMeal(msg.id, itemId, newSlot) },
                         onApplyTargets = onApplyTargets,
                         onAddFood = onAddFood
                     )
@@ -427,6 +542,10 @@ private fun CoachChatTab(
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        AssistChip(
+                            onClick = { inputText = "أكلت النهارده: " },
+                            label = { Text("سجّل وجبة / لخبطة", style = MaterialTheme.typography.labelSmall) }
+                        )
                         QUICK_CHAT_PROMPTS.take(3).forEach { (label, prompt) ->
                             AssistChip(
                                 onClick = {
@@ -518,7 +637,7 @@ private fun CoachChatTab(
                         onValueChange = { inputText = it },
                         placeholder = {
                             Text(
-                                text = "اسأل مدربك أو ابعت صورة...",
+                                text = "اوصف وجبة أكلتها لإضافتها أو اسأل مدربك...",
                                 style = MaterialTheme.typography.bodySmall
                             )
                         },
@@ -555,6 +674,8 @@ private fun CoachChatTab(
 @Composable
 private fun ChatMessageBubble(
     message: CoachChatMessage,
+    onUndoAutoLoggedFood: (String) -> Unit,
+    onMoveAutoLoggedFoodMeal: (String, Int) -> Unit,
     onApplyTargets: (CoachSuggestedTargets) -> Unit,
     onAddFood: (CoachSuggestedFood) -> Unit
 ) {
@@ -606,6 +727,15 @@ private fun ChatMessageBubble(
                     }
                 )
             }
+        }
+
+        if (!message.fromUser && message.autoLoggedFoods.isNotEmpty()) {
+            CoachAutoLoggedSection(
+                entries = message.autoLoggedFoods,
+                onUndoItem = onUndoAutoLoggedFood,
+                onMoveMealSlot = onMoveAutoLoggedFoodMeal,
+                modifier = Modifier.widthIn(max = 350.dp)
+            )
         }
 
         if (!message.fromUser && (message.suggestedTargets != null || message.suggestedFoods.isNotEmpty())) {

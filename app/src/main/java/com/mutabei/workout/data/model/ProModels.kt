@@ -45,7 +45,16 @@ data class CoachSuggestedFood(
     val kcal: Int = 0,
     val proteinG: Int = 0,
     val carbsG: Int = 0,
-    val fatG: Int = 0
+    val fatG: Int = 0,
+    val fiberG: Int = 0,
+    val sodiumMg: Int = 0,
+    val mealIndex: Int = 3
+)
+
+data class CoachAutoLoggedFood(
+    val loggedItemId: String,
+    val food: CoachSuggestedFood,
+    val mealIndex: Int
 )
 
 data class AiWeeklyCoachReport(
@@ -196,7 +205,8 @@ data class PreWorkoutGamePlan(
 data class CoachChatReply(
     val replyAr: String,
     val suggestedTargets: CoachSuggestedTargets? = null,
-    val suggestedFoods: List<CoachSuggestedFood> = emptyList()
+    val suggestedFoods: List<CoachSuggestedFood> = emptyList(),
+    val loggedFoods: List<CoachSuggestedFood> = emptyList()
 )
 
 data class CoachChatMessage(
@@ -206,6 +216,7 @@ data class CoachChatMessage(
     val imageBitmap: Bitmap? = null,
     val suggestedTargets: CoachSuggestedTargets? = null,
     val suggestedFoods: List<CoachSuggestedFood> = emptyList(),
+    val autoLoggedFoods: List<CoachAutoLoggedFood> = emptyList(),
     val timestampMs: Long = System.currentTimeMillis()
 )
 

@@ -39,6 +39,7 @@ import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.Restaurant
 import androidx.compose.material.icons.rounded.TrendingFlat
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Undo
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.WaterDrop
 import androidx.compose.material3.AlertDialog
@@ -73,14 +74,164 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.mutabei.workout.data.model.AiWeeklyCoachReport
+import com.mutabei.workout.data.model.CoachAutoLoggedFood
 import com.mutabei.workout.data.model.CoachReportRecord
 import com.mutabei.workout.data.model.CoachSuggestedFood
 import com.mutabei.workout.data.model.CoachSuggestedTargets
+import com.mutabei.workout.data.model.NutritionConstants
 import com.mutabei.workout.data.model.PreWorkoutGamePlan
 import com.mutabei.workout.data.model.SplitDay
 import com.mutabei.workout.ui.theme.LocalSemanticColors
 import com.mutabei.workout.ui.viewmodel.AiCoachUiState
 import com.mutabei.workout.ui.viewmodel.AiPreWorkoutUiState
+
+@Composable
+fun CoachAutoLoggedSection(
+    entries: List<CoachAutoLoggedFood>,
+    onUndoItem: (String) -> Unit,
+    onMoveMealSlot: (String, Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (entries.isEmpty()) return
+    val semantic = LocalSemanticColors.current
+    val totalKcal = entries.sumOf { it.food.kcal }
+    val totalP = entries.sumOf { it.food.proteinG }
+    val totalC = entries.sumOf { it.food.carbsG }
+    val totalF = entries.sumOf { it.food.fatG }
+
+    Surface(
+        color = semantic.ok.copy(alpha = 0.11f),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, semantic.ok.copy(alpha = 0.45f)),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("coach_auto_logged_card")
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.CheckCircle,
+                        contentDescription = null,
+                        tint = semantic.ok,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "اتضافت ليوم النهارده تلقائياً",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = semantic.ok
+                    )
+                }
+                Surface(
+                    color = semantic.ok.copy(alpha = 0.18f),
+                    shape = RoundedCornerShape(99.dp)
+                ) {
+                    Text(
+                        text = "+$totalKcal سعر",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = semantic.ok,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
+
+            if (entries.size > 1) {
+                Text(
+                    text = "إجمالي المضاف: $totalKcal سعر · ب ${totalP}جم · ك ${totalC}جم · د ${totalF}جم",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            entries.forEach { entry ->
+                val food = entry.food
+                val mealLabel = NutritionConstants.MEAL_NAMES.getOrElse(entry.mealIndex.coerceIn(0, 3)) { "سناك" }
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = "${food.name} (${food.grams} جم)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "${food.kcal} سعر · ب ${food.proteinG}جم · ك ${food.carbsG}جم · د ${food.fatG}جم",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                                shape = RoundedCornerShape(99.dp),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(99.dp))
+                                    .clickable {
+                                        val nextSlot = (entry.mealIndex + 1) % 4
+                                        onMoveMealSlot(entry.loggedItemId, nextSlot)
+                                    }
+                                    .testTag("coach_logged_meal_slot_${entry.loggedItemId}")
+                            ) {
+                                Text(
+                                    text = mealLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = { onUndoItem(entry.loggedItemId) },
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .testTag("coach_logged_undo_${entry.loggedItemId}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Undo,
+                                    contentDescription = "تراجع وحذف من اليوم",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Text(
+                text = "اضغط على اسم الوجبة لتغيير مكانها (فطار / غدا / عشا / سناك)، أو ↩ للحذف.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
 
 @Composable
 fun CoachActionProposalsSection(

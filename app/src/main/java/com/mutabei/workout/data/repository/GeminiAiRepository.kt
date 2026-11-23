@@ -366,10 +366,33 @@ class GeminiAiRepository {
                 "kcal" to Schema.integer(description = "Approximate calories for this serving"),
                 "protein_g" to Schema.integer(description = "Approximate protein in grams"),
                 "carbs_g" to Schema.integer(description = "Approximate carbs in grams"),
-                "fat_g" to Schema.integer(description = "Approximate fat in grams")
-            )
+                "fat_g" to Schema.integer(description = "Approximate fat in grams"),
+                "fiber_g" to Schema.integer(description = "Approximate fiber in grams"),
+                "sodium_mg" to Schema.integer(description = "Approximate sodium in mg"),
+                "meal_index" to Schema.integer(description = "Meal slot: 0=فطار, 1=غدا, 2=عشا, 3=سناك")
+            ),
+            optionalProperties = listOf("fiber_g", "sodium_mg", "meal_index")
         ),
-        description = "0 to 3 concrete Egyptian foods/snacks the user can 1-tap add to today's log",
+        description = "0 to 3 future Egyptian food/snack recommendations the user has NOT eaten yet and can 1-tap add later",
+        nullable = true
+    )
+
+    private fun loggedFoodsSchema(): Schema = Schema.array(
+        items = Schema.obj(
+            properties = mapOf(
+                "name" to Schema.string(description = "Clear Arabic food/dish name the user ate"),
+                "grams" to Schema.integer(description = "Realistic estimated weight eaten in grams (5..2500)"),
+                "kcal" to Schema.integer(description = "Honest realistic total calories for this serving (never optimistic for restaurant/cheat food)"),
+                "protein_g" to Schema.integer(description = "Realistic protein in grams"),
+                "carbs_g" to Schema.integer(description = "Realistic carbs in grams"),
+                "fat_g" to Schema.integer(description = "Realistic fat in grams"),
+                "fiber_g" to Schema.integer(description = "Approximate fiber in grams"),
+                "sodium_mg" to Schema.integer(description = "Approximate sodium in mg"),
+                "meal_index" to Schema.integer(description = "Meal slot: 0=فطار (Breakfast), 1=غدا (Lunch), 2=عشا (Dinner), 3=سناك (Snack)")
+            ),
+            optionalProperties = listOf("fiber_g", "sodium_mg")
+        ),
+        description = "Populate ONLY when the user reports food/meals/cheat meals they ALREADY ATE or asks you to calculate and add/log a meal into today's nutrition log (text description or meal photo). Include EVERY distinct item consumed (up to 8 items). Leave null when not logging consumed food.",
         nullable = true
     )
 
@@ -420,9 +443,10 @@ class GeminiAiRepository {
             properties = mapOf(
                 "reply_ar" to Schema.string(description = "Clear, friendly, sharp Egyptian Arabic coaching answer grounded strictly in the athlete's real data and attached image if any"),
                 "suggested_targets" to suggestedTargetsSchema(),
-                "suggested_foods" to suggestedFoodsSchema()
+                "suggested_foods" to suggestedFoodsSchema(),
+                "logged_foods" to loggedFoodsSchema()
             ),
-            optionalProperties = listOf("suggested_targets", "suggested_foods")
+            optionalProperties = listOf("suggested_targets", "suggested_foods", "logged_foods")
         )
     }
 
@@ -432,9 +456,14 @@ class GeminiAiRepository {
         1. كل ردودك باللهجة المصرية المحترمة، عملية، مباشرة، ومبنية على الأرقام الحقيقية الموجودة في ملف اللاعب.
         2. لما اللاعب يسأل عن بديل تمرين بسبب إصابة/ألم أو زحمة الجيم: اديله بديلين علميين بنفس المسار العضلي وحدد الوزن المبدئي المناسب.
         3. لما يبعت صورة (منيو مطعم، محتويات تلاجة، أو علبة مكمل): حلّل الصورة بدقة بناءً على باقي سعراته وماكروزه ومكملاته النهارده، واديله اختيار محدد بالجرامات.
-        4. حط suggested_targets بس لو اللاعب طلب تعديل سعرات/ماكروز أو لقيت فعلاً سبب رقمي واضح للتعديل. وإلا خليها null.
-        5. حط suggested_foods (1-3 أكلات مصرية بالجرامات والماكروز) لما تقترح وجبة أو سناك محدد يقدر يضيفه ليوم النهارده بضغطة واحدة.
-        6. استخدم تنسيق بسيط ونقاط واضحة بدون حشو طويل.
+        4. **تسجيل الوجبات واللخبطة تلقائياً (أولوية قصوى):** لما اللاعب يقولك إنه أكل وجبة أو لخبط أو مش عارف سعرات أكلة أو مش عارف يدخلها إزاي، أو بعت صورة أكلة أكلها وطلب تضيفها أو تحسبها له عشان يشوف متبقيله إيه:
+           - حط كل صنف أكله بالتفصيل في `logged_foods` بأوزان جرامات واقعية وسعرات وماكروز صريحة غير متفائلة (خصوصًا في أكل المطاعم والمخبوزات والحلويات والمقليات المصرية مثل الكشري، الشاورما، المحشي، المكرونة بالبشاميل، الكنافة، البيبسي... إلخ)، وحدد `meal_index` المناسب (0=فطار، 1=غدا، 2=عشا، 3=سناك) حسب كلامه أو نوع الوجبة.
+           - التطبيق هيسجّل `logged_foods` تلقائياً في يوم النهارده فورًا مع ردك.
+           - في `reply_ar`: اكتب ملخص واضح لسعرات وماكروز اللي اتسجّل، ثم احسبله بالظبط **المتبقي له النهارده بعد الإضافة** (السعرات، البروتين، الكارب، الدهون) بناءً على أرقام ملفه الحالية. لو عدا السعرات، طمّنه بدون تأنيب واديله خطة عملية لباقي اليوم (مثلاً يركّز على بروتين صافي بأقل سعرات + مشي خفيف أو يوزن باقي اليوم).
+           - ما تكررش الأكلات اللي حطيتها في `logged_foods` جوه `suggested_foods`.
+        5. حط `suggested_targets` بس لو اللاعب طلب تعديل أهداف السعرات/الماكروز أو لقيت فعلاً سبب رقمي واضح للتعديل. وإلا خليها null.
+        6. حط `suggested_foods` (1-3 أكلات مصرية بالجرامات والماكروز) فقط لما تقترح وجبة أو سناك **مستقبلي لسه مأكلوش** يقدر يضيفه بضغطة واحدة.
+        7. استخدم تنسيق بسيط ونقاط واضحة بدون حشو طويل.
     """.trimIndent()
 
     private val deficiencyModels by lazy {
@@ -1038,11 +1067,23 @@ class GeminiAiRepository {
             onProgress = onProgress
         )
         val json = JSONObject(rawText)
+        val defaultMeal = defaultMealIndexForCurrentHour()
         CoachChatReply(
             replyAr = json.optString("reply_ar", "").trim().ifBlank { "حاضر، قولّي تفاصيل أكتر عشان أساعدك بدقة." },
             suggestedTargets = parseSuggestedTargets(json.optJSONObject("suggested_targets")),
-            suggestedFoods = parseSuggestedFoods(json.optJSONArray("suggested_foods"))
+            suggestedFoods = parseSuggestedFoods(json.optJSONArray("suggested_foods"), defaultMealIndex = defaultMeal),
+            loggedFoods = parseSuggestedFoods(json.optJSONArray("logged_foods"), defaultMealIndex = defaultMeal)
         )
+    }
+
+    private fun defaultMealIndexForCurrentHour(): Int {
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        return when (hour) {
+            in 5..11 -> 0 // فطار
+            in 12..17 -> 1 // غدا
+            in 18..23 -> 2 // عشا
+            else -> 3 // سناك
+        }
     }
 
     private fun parseSuggestedTargets(obj: JSONObject?): CoachSuggestedTargets? {
@@ -1061,21 +1102,32 @@ class GeminiAiRepository {
         ).takeIf { it.isValid() }
     }
 
-    private fun parseSuggestedFoods(arr: org.json.JSONArray?): List<CoachSuggestedFood> {
+    private fun parseSuggestedFoods(
+        arr: org.json.JSONArray?,
+        defaultMealIndex: Int = 3
+    ): List<CoachSuggestedFood> {
         if (arr == null) return emptyList()
         val out = mutableListOf<CoachSuggestedFood>()
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
             val name = o.optString("name", "").trim()
             if (name.isBlank()) continue
+            val mealIdx = if (o.has("meal_index") && !o.isNull("meal_index")) {
+                o.optInt("meal_index", defaultMealIndex).coerceIn(0, 3)
+            } else {
+                defaultMealIndex
+            }
             out.add(
                 CoachSuggestedFood(
                     name = name,
-                    grams = o.optInt("grams", 100).coerceIn(5, 2000),
+                    grams = o.optInt("grams", 100).coerceIn(5, 2500),
                     kcal = o.optInt("kcal", 0).coerceAtLeast(0),
                     proteinG = o.optInt("protein_g", 0).coerceAtLeast(0),
                     carbsG = o.optInt("carbs_g", 0).coerceAtLeast(0),
-                    fatG = o.optInt("fat_g", 0).coerceAtLeast(0)
+                    fatG = o.optInt("fat_g", 0).coerceAtLeast(0),
+                    fiberG = o.optInt("fiber_g", 0).coerceAtLeast(0),
+                    sodiumMg = o.optInt("sodium_mg", 0).coerceAtLeast(0),
+                    mealIndex = mealIdx
                 )
             )
         }

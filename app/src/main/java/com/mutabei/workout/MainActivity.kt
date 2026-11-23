@@ -89,6 +89,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
 import com.mutabei.workout.data.model.UiState
+import com.mutabei.workout.data.model.todayIso
 import com.mutabei.workout.data.repository.FirestoreRepository
 import com.mutabei.workout.data.repository.GeminiAiRepository
 import com.mutabei.workout.data.repository.OfflineFoodRepository
@@ -99,6 +100,7 @@ import com.mutabei.workout.ui.components.formatWorkoutElapsed
 import com.mutabei.workout.ui.screens.AiCoachHubSheet
 import com.mutabei.workout.ui.screens.AuthScreen
 import com.mutabei.workout.ui.screens.BodyScreen
+import com.mutabei.workout.ui.screens.CoachTodayMacroStatus
 import com.mutabei.workout.ui.screens.NutritionScreen
 import com.mutabei.workout.ui.screens.SettingsSheet
 import com.mutabei.workout.ui.screens.WorkoutScreen
@@ -113,6 +115,7 @@ import com.mutabei.workout.ui.viewmodel.WorkoutSessionTimerState
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -254,16 +257,34 @@ private fun MainAppShell(user: FirebaseUser) {
         }
 
         if (showCoachDialog && snapshot != null) {
+            val todayNut = snapshot.nutritionDays[todayIso()]
+            val targets = viewModel.computeTargets(snapshot.config, snapshot.bodyRecords)
+            val todayMacros = targets?.let { t ->
+                val items = todayNut?.items.orEmpty()
+                CoachTodayMacroStatus(
+                    targetKcal = t.kcal,
+                    targetProteinG = t.proteinG,
+                    targetCarbsG = t.carbsG,
+                    targetFatG = t.fatG,
+                    consumedKcal = items.sumOf { it.nutrientAmount("kcal") }.roundToInt(),
+                    consumedProteinG = items.sumOf { it.nutrientAmount("p") }.roundToInt(),
+                    consumedCarbsG = items.sumOf { it.nutrientAmount("c") }.roundToInt(),
+                    consumedFatG = items.sumOf { it.nutrientAmount("f") }.roundToInt()
+                )
+            }
             AiCoachHubSheet(
                 weekNumber = viewModel.computeWeekNumber(snapshot.config.startDate),
                 splitDays = snapshot.config.effectiveSplit(),
                 selectedDayIndex = selectedDayIndex,
+                todayMacros = todayMacros,
                 chatState = coachChat,
                 preWorkoutState = preWorkoutPlan,
                 weeklyState = coachReport,
                 savedReports = snapshot.coachReports,
                 onSendChat = viewModel::sendCoachChatMessage,
                 onClearChat = viewModel::clearCoachChat,
+                onUndoAutoLoggedFood = viewModel::undoCoachAutoLoggedFood,
+                onMoveAutoLoggedFoodMeal = viewModel::moveCoachAutoLoggedFoodMeal,
                 onGeneratePreWorkout = viewModel::requestPreWorkoutGamePlan,
                 onGenerateWeeklyReport = viewModel::requestWeeklyCoachReport,
                 onDeleteReport = viewModel::deleteCoachReport,

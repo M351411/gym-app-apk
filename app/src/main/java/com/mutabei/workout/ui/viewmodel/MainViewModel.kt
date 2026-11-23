@@ -11,6 +11,7 @@ import com.mutabei.workout.data.model.AiLabelResult
 import com.mutabei.workout.data.model.AiMacroTetrisResult
 import com.mutabei.workout.data.model.AiWeeklyCoachReport
 import com.mutabei.workout.data.model.BodyRecord
+import com.mutabei.workout.data.model.CoachAutoLoggedFood
 import com.mutabei.workout.data.model.CoachChatMessage
 import com.mutabei.workout.data.model.CoachReportRecord
 import com.mutabei.workout.data.model.CoachSuggestedFood
@@ -1047,7 +1048,10 @@ class MainViewModel(
                 if (itemNames.isNotBlank()) append(" المسجل: $itemNames.")
             }
         } else {
-            "النهارده لسه لم يتم تسجيل أكل أو ماء."
+            val remLine = targets?.let {
+                " المتبقي اليوم بالكامل: ${it.kcal} سعر | بروتين ${it.proteinG}جم | كارب ${it.carbsG}جم | دهون ${it.fatG}جم."
+            }.orEmpty()
+            "النهارده لسه لم يتم تسجيل أكل أو ماء.$remLine"
         }
 
         // 4) 7-day nutrition averages + micronutrient deficits
@@ -1247,12 +1251,18 @@ class MainViewModel(
             }
             res.fold(
                 onSuccess = { reply ->
+                    val autoLoggedEntries = if (reply.loggedFoods.isNotEmpty()) {
+                        persistCoachLoggedFoods(reply.loggedFoods)
+                    } else {
+                        emptyList()
+                    }
                     val aiMsg = CoachChatMessage(
                         id = UUID.randomUUID().toString(),
                         fromUser = false,
                         text = reply.replyAr,
                         suggestedTargets = reply.suggestedTargets,
-                        suggestedFoods = reply.suggestedFoods
+                        suggestedFoods = reply.suggestedFoods,
+                        autoLoggedFoods = autoLoggedEntries
                     )
                     _coachChat.update {
                         it.copy(
@@ -1260,6 +1270,15 @@ class MainViewModel(
                             busyMessage = null,
                             errorMessage = null
                         )
+                    }
+                    if (autoLoggedEntries.isNotEmpty()) {
+                        val totalKcal = autoLoggedEntries.sumOf { it.food.kcal }
+                        val countLabel = if (autoLoggedEntries.size == 1) {
+                            autoLoggedEntries.first().food.name
+                        } else {
+                            "${autoLoggedEntries.size} أصناف"
+                        }
+                        showToast("اتضاف $countLabel ($totalKcal سعر) ليوم النهارده تلقائياً ✅")
                     }
                 },
                 onFailure = { e ->
@@ -1271,6 +1290,117 @@ class MainViewModel(
                     }
                 }
             )
+        }
+    }
+
+    private fun buildLoggedItemFromCoachFood(
+        food: CoachSuggestedFood,
+        mealIndex: Int
+    ): LoggedFoodItem {
+        val grams = food.grams.coerceIn(5, 2500).toDouble()
+        val scale = 100.0 / grams
+        val nutArr = MutableList(NutritionConstants.NUTRIENT_COUNT) { -1.0 }
+        nutArr[0] = (food.kcal * scale).coerceAtLeast(0.0)
+        nutArr[1] = (food.proteinG * scale).coerceAtLeast(0.0)
+        nutArr[2] = (food.fatG * scale).coerceAtLeast(0.0)
+        nutArr[3] = (food.carbsG * scale).coerceAtLeast(0.0)
+        if (food.fiberG > 0) {
+            NutritionConstants.NUTRIENT_INDEX["fib"]?.let { idx ->
+                nutArr[idx] = (food.fiberG * scale).coerceAtLeast(0.0)
+            }
+        }
+        if (food.sodiumMg > 0) {
+            NutritionConstants.NUTRIENT_INDEX["na"]?.let { idx ->
+                nutArr[idx] = (food.sodiumMg * scale).coerceAtLeast(0.0)
+            }
+        }
+        return LoggedFoodItem(
+            id = UUID.randomUUID().toString(),
+            name = food.name.trim().ifBlank { "وجبة مسجلة بالمدرب الذكي" },
+            source = "a",
+            grams = grams,
+            mealIndex = mealIndex.coerceIn(0, 3),
+            nutrients = nutArr
+        )
+    }
+
+    private suspend fun persistCoachLoggedFoods(foods: List<CoachSuggestedFood>): List<CoachAutoLoggedFood> {
+        val today = todayIso()
+        val latestSnap = currentSnapshot()
+        val day = latestSnap.nutritionDays[today] ?: NutritionDay(id = today, userId = currentUserId, date = today)
+
+        val pairs = foods.take(8).map { f ->
+            val slot = f.mealIndex.coerceIn(0, 3)
+            val item = buildLoggedItemFromCoachFood(f, slot)
+            item to CoachAutoLoggedFood(
+                loggedItemId = item.id,
+                food = f.copy(mealIndex = slot),
+                mealIndex = slot
+            )
+        }
+        val newItems = pairs.map { it.first }
+        val res = firestoreRepo.saveNutritionDay(currentUserId, day.copy(items = day.items + newItems))
+        return if (res.isSuccess) {
+            pairs.map { it.second }
+        } else {
+            showToast("تعذّر حفظ الوجبة في سجل النهارده — جرّب تاني.")
+            emptyList()
+        }
+    }
+
+    fun undoCoachAutoLoggedFood(messageId: String, loggedItemId: String) {
+        val today = todayIso()
+        val snap = currentSnapshot()
+        val day = snap.nutritionDays[today] ?: return
+        val remaining = day.items.filterNot { it.id == loggedItemId }
+        viewModelScope.launch {
+            val res = firestoreRepo.saveNutritionDay(currentUserId, day.copy(items = remaining))
+            if (res.isSuccess) {
+                _coachChat.update { st ->
+                    st.copy(
+                        messages = st.messages.map { m ->
+                            if (m.id == messageId) {
+                                m.copy(autoLoggedFoods = m.autoLoggedFoods.filterNot { it.loggedItemId == loggedItemId })
+                            } else m
+                        }
+                    )
+                }
+                showToast("تم التراجع وحذف الصنف من يوم النهارده")
+            } else {
+                showToast("تعذّر حذف الصنف")
+            }
+        }
+    }
+
+    fun moveCoachAutoLoggedFoodMeal(messageId: String, loggedItemId: String, newMealIndex: Int) {
+        val safeMeal = newMealIndex.coerceIn(0, 3)
+        val today = todayIso()
+        val snap = currentSnapshot()
+        val day = snap.nutritionDays[today] ?: return
+        val updatedItems = day.items.map { item ->
+            if (item.id == loggedItemId) item.copy(mealIndex = safeMeal) else item
+        }
+        viewModelScope.launch {
+            val res = firestoreRepo.saveNutritionDay(currentUserId, day.copy(items = updatedItems))
+            if (res.isSuccess) {
+                _coachChat.update { st ->
+                    st.copy(
+                        messages = st.messages.map { m ->
+                            if (m.id == messageId) {
+                                m.copy(
+                                    autoLoggedFoods = m.autoLoggedFoods.map { entry ->
+                                        if (entry.loggedItemId == loggedItemId) entry.copy(mealIndex = safeMeal) else entry
+                                    }
+                                )
+                            } else m
+                        }
+                    )
+                }
+                val mealLabel = NutritionConstants.MEAL_NAMES.getOrElse(safeMeal) { "سناك" }
+                showToast("اتنقلت لـ $mealLabel ✅")
+            } else {
+                showToast("تعذّر تغيير الوجبة")
+            }
         }
     }
 
@@ -1300,45 +1430,38 @@ class MainViewModel(
         }
     }
 
-    fun addCoachSuggestedFoodToToday(food: CoachSuggestedFood, mealIndex: Int = 3) {
-        val grams = food.grams.coerceIn(5, 2000).toDouble()
+    fun addCoachSuggestedFoodToToday(food: CoachSuggestedFood, mealIndex: Int = food.mealIndex) {
+        val safeMeal = mealIndex.coerceIn(0, 3)
         val today = todayIso()
         val snap = currentSnapshot()
         val day = snap.nutritionDays[today] ?: NutritionDay(id = today, userId = currentUserId, date = today)
 
         viewModelScope.launch {
-            offlineFoodRepo.ensureLoaded()
-            val matches = offlineFoodRepo.search(food.name, snap.customFoods, limit = 5)
-            val bestMatch = matches.firstOrNull()
-            val entry = if (bestMatch != null) {
-                val raw = LoggedFoodItem(
-                    id = UUID.randomUUID().toString(),
-                    name = bestMatch.name,
-                    source = bestMatch.source,
-                    grams = grams,
-                    mealIndex = mealIndex,
-                    nutrients = LoggedFoodItem.normalizeNutrients(bestMatch.nutrients)
-                )
-                offlineFoodRepo.enrichLoggedItem(raw, snap.customFoods)
+            val entry = if (food.kcal > 0 || food.proteinG > 0 || food.carbsG > 0 || food.fatG > 0) {
+                // Preserve Gemini's exact estimated calories & macros for mixed/Egyptian meals
+                buildLoggedItemFromCoachFood(food, safeMeal)
             } else {
-                val scale = 100.0 / grams
-                val nutArr = MutableList(NutritionConstants.NUTRIENT_COUNT) { -1.0 }
-                nutArr[0] = (food.kcal * scale).coerceAtLeast(0.0)
-                nutArr[1] = (food.proteinG * scale).coerceAtLeast(0.0)
-                nutArr[2] = (food.fatG * scale).coerceAtLeast(0.0)
-                nutArr[3] = (food.carbsG * scale).coerceAtLeast(0.0)
-                LoggedFoodItem(
-                    id = UUID.randomUUID().toString(),
-                    name = food.name,
-                    source = "a",
-                    grams = grams,
-                    mealIndex = mealIndex,
-                    nutrients = nutArr
-                )
+                offlineFoodRepo.ensureLoaded()
+                val grams = food.grams.coerceIn(5, 2500).toDouble()
+                val bestMatch = offlineFoodRepo.search(food.name, snap.customFoods, limit = 5).firstOrNull()
+                if (bestMatch != null) {
+                    val raw = LoggedFoodItem(
+                        id = UUID.randomUUID().toString(),
+                        name = bestMatch.name,
+                        source = bestMatch.source,
+                        grams = grams,
+                        mealIndex = safeMeal,
+                        nutrients = LoggedFoodItem.normalizeNutrients(bestMatch.nutrients)
+                    )
+                    offlineFoodRepo.enrichLoggedItem(raw, snap.customFoods)
+                } else {
+                    buildLoggedItemFromCoachFood(food, safeMeal)
+                }
             }
             val res = firestoreRepo.saveNutritionDay(currentUserId, day.copy(items = day.items + entry))
             if (res.isSuccess) {
-                showToast("اتضافت ${entry.name} (${grams.roundToInt()}جم) ليوم النهارده ✅")
+                val mealLabel = NutritionConstants.MEAL_NAMES.getOrElse(safeMeal) { "سناك" }
+                showToast("اتضافت ${entry.name} (${entry.grams.roundToInt()}جم) في $mealLabel ✅")
             } else {
                 showToast("تعذّر إضافة الأكلة ليوم النهارده")
             }
