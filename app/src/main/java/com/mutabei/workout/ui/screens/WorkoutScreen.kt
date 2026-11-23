@@ -68,7 +68,6 @@ import com.mutabei.workout.data.model.WorkoutDefaults
 import com.mutabei.workout.data.model.shiftIsoDate
 import com.mutabei.workout.data.model.todayIso
 import com.mutabei.workout.ui.components.ConsistencyHeatmapCard
-import com.mutabei.workout.ui.components.DoubleProgressionBanner
 import com.mutabei.workout.ui.components.DualLineProgressChart
 import com.mutabei.workout.ui.components.ExpandableSectionCard
 import com.mutabei.workout.ui.components.MetricProgressBar
@@ -76,13 +75,17 @@ import com.mutabei.workout.ui.components.MuscleRecoveryHeatmapCard
 import com.mutabei.workout.ui.components.MuscleSilhouetteCanvas
 import com.mutabei.workout.ui.components.PersonalRecordBadge
 import com.mutabei.workout.ui.components.PlateCalculatorDialog
+import com.mutabei.workout.ui.components.SetGoalTargetIcon
 import com.mutabei.workout.ui.components.WorkoutSessionSummaryCard
+import com.mutabei.workout.ui.components.WorkoutSessionTimerBar
 import com.mutabei.workout.ui.components.computeDoubleProgression
+import com.mutabei.workout.ui.components.computeSetTargetGoal
 import com.mutabei.workout.ui.components.isLivePersonalRecord
 import com.mutabei.workout.ui.theme.LocalSemanticColors
 import com.mutabei.workout.ui.viewmodel.AppDataSnapshot
 import com.mutabei.workout.ui.viewmodel.ExerciseHistoryPoint
 import com.mutabei.workout.ui.viewmodel.MainViewModel
+import com.mutabei.workout.ui.viewmodel.WorkoutSessionTimerState
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -92,6 +95,7 @@ fun WorkoutScreen(
     snapshot: AppDataSnapshot,
     selectedDayIndex: Int,
     drafts: Map<String, List<SetEntry>>,
+    workoutTimer: WorkoutSessionTimerState,
     viewModel: MainViewModel
 ) {
     val context = LocalContext.current
@@ -149,6 +153,15 @@ fun WorkoutScreen(
                         )
                     }
                 }
+            }
+
+            // Total Workout Session Timer
+            item(key = "workout_session_timer") {
+                WorkoutSessionTimerBar(
+                    state = workoutTimer,
+                    onToggle = viewModel::toggleWorkoutSessionTimer,
+                    onReset = viewModel::resetWorkoutSessionTimer
+                )
             }
 
             // Live session summary & Tonnage card
@@ -252,6 +265,7 @@ fun WorkoutScreen(
                         )
                     },
                     onOpenPlateCalc = { w -> plateCalcTarget = chosenName to w },
+                    onShowToast = viewModel::showToast,
                     onSaveExercise = {
                         viewModel.saveExerciseLog(safeDayIdx, exIdx, chosenName, activeSets)
                     }
@@ -327,6 +341,7 @@ private fun ExerciseCard(
     onRepsDone: () -> Unit,
     onPrefillWeights: (List<SetEntry>, Double?) -> Unit,
     onOpenPlateCalc: (Double) -> Unit,
+    onShowToast: (String) -> Unit,
     onSaveExercise: () -> Unit
 ) {
     val semantic = LocalSemanticColors.current
@@ -481,12 +496,6 @@ private fun ExerciseCard(
                 }
             }
 
-            // Double Progression Coach banner
-            if (progressionAdvice != null) {
-                Spacer(Modifier.height(6.dp))
-                DoubleProgressionBanner(advice = progressionAdvice)
-            }
-
             // Last session summary + 1-tap weight fill
             if (lastSession != null) {
                 Spacer(Modifier.height(6.dp))
@@ -525,10 +534,13 @@ private fun ExerciseCard(
                 }
             }
 
-            // Working sets rows
+            // Working sets rows (with per-set long-press goal icon)
             Spacer(Modifier.height(8.dp))
             sets.forEachIndexed { setIdx, set ->
                 val repHint = WorkoutDefaults.repHint(set.reps, spec.minReps, spec.maxReps)
+                val setGoal = remember(spec, lastSession, setIdx, progressionAdvice) {
+                    computeSetTargetGoal(spec, lastSession, setIdx, progressionAdvice)
+                }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -540,7 +552,7 @@ private fun ExerciseCard(
                         text = "${setIdx + 1}",
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(22.dp),
+                        modifier = Modifier.width(20.dp),
                         textAlign = TextAlign.Center
                     )
                     OutlinedTextField(
@@ -582,6 +594,16 @@ private fun ExerciseCard(
                         modifier = Modifier
                             .weight(1f)
                             .testTag("set_reps_${dayIndex}_${exIndex}_$setIdx")
+                    )
+                    SetGoalTargetIcon(
+                        goal = setGoal,
+                        currentSet = set,
+                        minReps = spec.minReps,
+                        testTag = "set_goal_icon_${dayIndex}_${exIndex}_$setIdx",
+                        onApplyWeight = { wStr -> onSetChanged(setIdx, wStr, null) },
+                        onShortTapHint = {
+                            onShowToast("اضغط مطوّلاً على أيقونة الهدف لعرض هدف المجموعة ${setIdx + 1}")
+                        }
                     )
                 }
                 if (repHint != null) {

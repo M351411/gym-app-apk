@@ -42,6 +42,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.ConcurrentHashMap
 
 private const val TAG = "GeminiAiRepo"
 private const val PRIMARY_MODEL_NAME = "gemini-3.8-flash"
@@ -49,7 +50,11 @@ private const val FALLBACK_MODEL_NAME = "gemini-3.5-flash-lite"
 
 private const val PRIMARY_TEXT_TIMEOUT_MS = 30_000L
 private const val PRIMARY_IMAGE_TIMEOUT_MS = 55_000L
-private const val FALLBACK_TIMEOUT_MS = 35_000L
+private const val FALLBACK_TEXT_TIMEOUT_MS = 35_000L
+private const val FALLBACK_IMAGE_TIMEOUT_MS = 45_000L
+
+private const val DAILY_QUOTA_COOLDOWN_MS = 30 * 60_000L
+private const val RPM_QUOTA_COOLDOWN_MS = 60_000L
 
 private const val FULL_MICRONUTRIENT_INSTRUCTION =
     "Never return null or skip micronutrients. Always estimate full micronutrient values based on USDA FoodData Central and Egyptian Food Composition Tables for the exact weight provided. Only return 0 if the food genuinely contains zero of that nutrient (e.g., cholesterol in plant foods)."
@@ -66,6 +71,17 @@ private class GeminiStreamStageException(
 ) : Exception(primarySummary, cause)
 
 class GeminiAiRepository {
+
+    private data class ModelPair(
+        val primaryName: String,
+        val primary: GenerativeModel,
+        val fallbackName: String,
+        val fallback: GenerativeModel
+    )
+
+    // Remembers models that recently hit Free Tier quota so subsequent calls route straight
+    // to the healthy backup model without wasting latency on a guaranteed 429/QuotaExceededException.
+    private val quotaCooldownUntilMs = ConcurrentHashMap<String, Long>()
 
     private fun segmentalSchema(description: String): Schema = Schema.obj(
         description = description,
@@ -250,22 +266,61 @@ class GeminiAiRepository {
         systemInstruction = systemPrompt?.let { content { text(it) } }
     )
 
-    // InBody sheets are dense A4 tables + bar graphs: LOW thinking keeps OCR accurate without stalling.
-    private val inBodyPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, inBodySchema, 0.0f, ThinkingLevel.LOW) }
-    private val inBodyFallback by lazy { buildModel(FALLBACK_MODEL_NAME, inBodySchema, 0.0f, thinking = null) }
-
-    private val labelPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, labelSchema, 0.1f, thinking = null) }
-    private val labelFallback by lazy { buildModel(FALLBACK_MODEL_NAME, labelSchema, 0.1f, thinking = null) }
-
-    private val foodsPrimary by lazy {
-        buildModel(PRIMARY_MODEL_NAME, foodsSchema, 0.1f, thinking = null, systemPrompt = FULL_MICRONUTRIENT_INSTRUCTION)
-    }
-    private val foodsFallback by lazy {
-        buildModel(FALLBACK_MODEL_NAME, foodsSchema, 0.1f, thinking = null, systemPrompt = FULL_MICRONUTRIENT_INSTRUCTION)
+    // Dense visual OCR & complex analytics: gemini-3.8-flash primary -> gemini-3.5-flash-lite fallback.
+    private val inBodyModels by lazy {
+        ModelPair(
+            primaryName = PRIMARY_MODEL_NAME,
+            primary = buildModel(PRIMARY_MODEL_NAME, inBodySchema, 0.0f, ThinkingLevel.LOW),
+            fallbackName = FALLBACK_MODEL_NAME,
+            fallback = buildModel(FALLBACK_MODEL_NAME, inBodySchema, 0.0f, thinking = null)
+        )
     }
 
-    private val barcodePrimary by lazy { buildModel(PRIMARY_MODEL_NAME, barcodeSchema, 0.0f, thinking = null) }
-    private val barcodeFallback by lazy { buildModel(FALLBACK_MODEL_NAME, barcodeSchema, 0.0f, thinking = null) }
+    private val labelPhotoModels by lazy {
+        ModelPair(
+            primaryName = PRIMARY_MODEL_NAME,
+            primary = buildModel(PRIMARY_MODEL_NAME, labelSchema, 0.1f, thinking = null),
+            fallbackName = FALLBACK_MODEL_NAME,
+            fallback = buildModel(FALLBACK_MODEL_NAME, labelSchema, 0.1f, thinking = null)
+        )
+    }
+
+    // Lightweight text supplement lookup: flash-lite primary preserves the 20/day 3.8-flash quota.
+    private val supplementLookupModels by lazy {
+        ModelPair(
+            primaryName = FALLBACK_MODEL_NAME,
+            primary = buildModel(FALLBACK_MODEL_NAME, labelSchema, 0.1f, thinking = null),
+            fallbackName = PRIMARY_MODEL_NAME,
+            fallback = buildModel(PRIMARY_MODEL_NAME, labelSchema, 0.1f, thinking = null)
+        )
+    }
+
+    private val mealPhotoModels by lazy {
+        ModelPair(
+            primaryName = PRIMARY_MODEL_NAME,
+            primary = buildModel(PRIMARY_MODEL_NAME, foodsSchema, 0.1f, thinking = null, systemPrompt = FULL_MICRONUTRIENT_INSTRUCTION),
+            fallbackName = FALLBACK_MODEL_NAME,
+            fallback = buildModel(FALLBACK_MODEL_NAME, foodsSchema, 0.1f, thinking = null, systemPrompt = FULL_MICRONUTRIENT_INSTRUCTION)
+        )
+    }
+
+    private val mealTextModels by lazy {
+        ModelPair(
+            primaryName = FALLBACK_MODEL_NAME,
+            primary = buildModel(FALLBACK_MODEL_NAME, foodsSchema, 0.1f, thinking = null, systemPrompt = FULL_MICRONUTRIENT_INSTRUCTION),
+            fallbackName = PRIMARY_MODEL_NAME,
+            fallback = buildModel(PRIMARY_MODEL_NAME, foodsSchema, 0.1f, thinking = null, systemPrompt = FULL_MICRONUTRIENT_INSTRUCTION)
+        )
+    }
+
+    private val barcodeModels by lazy {
+        ModelPair(
+            primaryName = FALLBACK_MODEL_NAME,
+            primary = buildModel(FALLBACK_MODEL_NAME, barcodeSchema, 0.0f, thinking = null),
+            fallbackName = PRIMARY_MODEL_NAME,
+            fallback = buildModel(PRIMARY_MODEL_NAME, barcodeSchema, 0.0f, thinking = null)
+        )
+    }
 
     private val deficiencyFixSchema: Schema by lazy {
         val suggestionSchema = Schema.obj(
@@ -372,7 +427,7 @@ class GeminiAiRepository {
     }
 
     private val coachChatSystemPrompt = """
-        أنت "المدرب الذكي" داخل تطبيق "متابع التمرين" — مدرب كمال أجسام وأخصائي تغذية رياضية مصري محترف معتمد على العلم (Hypertrophy, Progressive Overload, MPS Leucine Threshold, Adaptive TDEE, InBody Segmental Analysis).
+        أنت "المدرب الذكي" داخل تطبيق "عنتيل المحله" — مدرب كمال أجسام وأخصائي تغذية رياضية مصري محترف معتمد على العلم (Hypertrophy, Progressive Overload, MPS Leucine Threshold, Adaptive TDEE, InBody Segmental Analysis).
         قواعدك الصارمة:
         1. كل ردودك باللهجة المصرية المحترمة، عملية، مباشرة، ومبنية على الأرقام الحقيقية الموجودة في ملف اللاعب.
         2. لما اللاعب يسأل عن بديل تمرين بسبب إصابة/ألم أو زحمة الجيم: اديله بديلين علميين بنفس المسار العضلي وحدد الوزن المبدئي المناسب.
@@ -382,20 +437,42 @@ class GeminiAiRepository {
         6. استخدم تنسيق بسيط ونقاط واضحة بدون حشو طويل.
     """.trimIndent()
 
-    private val deficiencyPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, deficiencyFixSchema, 0.25f, thinking = null) }
-    private val deficiencyFallback by lazy { buildModel(FALLBACK_MODEL_NAME, deficiencyFixSchema, 0.25f, thinking = null) }
-
-    private val coachPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, weeklyCoachSchema, 0.25f, thinking = null) }
-    private val coachFallback by lazy { buildModel(FALLBACK_MODEL_NAME, weeklyCoachSchema, 0.25f, thinking = null) }
-
-    private val preWorkoutPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, preWorkoutPlanSchema, 0.25f, thinking = null) }
-    private val preWorkoutFallback by lazy { buildModel(FALLBACK_MODEL_NAME, preWorkoutPlanSchema, 0.25f, thinking = null) }
-
-    private val coachChatPrimary by lazy {
-        buildModel(PRIMARY_MODEL_NAME, coachChatSchema, 0.35f, thinking = null, systemPrompt = coachChatSystemPrompt)
+    private val deficiencyModels by lazy {
+        ModelPair(
+            primaryName = FALLBACK_MODEL_NAME,
+            primary = buildModel(FALLBACK_MODEL_NAME, deficiencyFixSchema, 0.25f, thinking = null),
+            fallbackName = PRIMARY_MODEL_NAME,
+            fallback = buildModel(PRIMARY_MODEL_NAME, deficiencyFixSchema, 0.25f, thinking = null)
+        )
     }
-    private val coachChatFallback by lazy {
-        buildModel(FALLBACK_MODEL_NAME, coachChatSchema, 0.35f, thinking = null, systemPrompt = coachChatSystemPrompt)
+
+    private val weeklyCoachModels by lazy {
+        ModelPair(
+            primaryName = PRIMARY_MODEL_NAME,
+            primary = buildModel(PRIMARY_MODEL_NAME, weeklyCoachSchema, 0.25f, thinking = null),
+            fallbackName = FALLBACK_MODEL_NAME,
+            fallback = buildModel(FALLBACK_MODEL_NAME, weeklyCoachSchema, 0.25f, thinking = null)
+        )
+    }
+
+    private val preWorkoutModels by lazy {
+        ModelPair(
+            primaryName = FALLBACK_MODEL_NAME,
+            primary = buildModel(FALLBACK_MODEL_NAME, preWorkoutPlanSchema, 0.25f, thinking = null),
+            fallbackName = PRIMARY_MODEL_NAME,
+            fallback = buildModel(PRIMARY_MODEL_NAME, preWorkoutPlanSchema, 0.25f, thinking = null)
+        )
+    }
+
+    // Chat is multi-turn and high-frequency: route to flash-lite primary so users can chat freely
+    // without burning through the 20/day Free Tier quota on gemini-3.8-flash.
+    private val coachChatModels by lazy {
+        ModelPair(
+            primaryName = FALLBACK_MODEL_NAME,
+            primary = buildModel(FALLBACK_MODEL_NAME, coachChatSchema, 0.35f, thinking = null, systemPrompt = coachChatSystemPrompt),
+            fallbackName = PRIMARY_MODEL_NAME,
+            fallback = buildModel(PRIMARY_MODEL_NAME, coachChatSchema, 0.35f, thinking = null, systemPrompt = coachChatSystemPrompt)
+        )
     }
 
     private val macroTetrisSchema: Schema by lazy {
@@ -425,8 +502,14 @@ class GeminiAiRepository {
         )
     }
 
-    private val macroTetrisPrimary by lazy { buildModel(PRIMARY_MODEL_NAME, macroTetrisSchema, 0.3f, thinking = null) }
-    private val macroTetrisFallback by lazy { buildModel(FALLBACK_MODEL_NAME, macroTetrisSchema, 0.3f, thinking = null) }
+    private val macroTetrisModels by lazy {
+        ModelPair(
+            primaryName = FALLBACK_MODEL_NAME,
+            primary = buildModel(FALLBACK_MODEL_NAME, macroTetrisSchema, 0.3f, thinking = null),
+            fallbackName = PRIMARY_MODEL_NAME,
+            fallback = buildModel(PRIMARY_MODEL_NAME, macroTetrisSchema, 0.3f, thinking = null)
+        )
+    }
 
     suspend fun parseInBodySheet(
         bitmap: Bitmap,
@@ -477,8 +560,7 @@ class GeminiAiRepository {
             bitmap = bitmap,
             prompt = prompt,
             taskLabel = "ورقة الـ InBody",
-            primaryModel = inBodyPrimary,
-            fallbackModel = inBodyFallback,
+            models = inBodyModels,
             highDetailJpeg = true,
             onProgress = onProgress
         )
@@ -585,8 +667,7 @@ class GeminiAiRepository {
             bitmap = bitmap,
             prompt = prompt,
             taskLabel = "الملصق الغذائي",
-            primaryModel = labelPrimary,
-            fallbackModel = labelFallback,
+            models = labelPhotoModels,
             highDetailJpeg = true,
             onProgress = onProgress
         )
@@ -611,8 +692,7 @@ class GeminiAiRepository {
         val rawText = executeTextJson(
             prompt = prompt,
             taskLabel = "تركيبة المكمل",
-            primaryModel = labelPrimary,
-            fallbackModel = labelFallback,
+            models = supplementLookupModels,
             onProgress = onProgress
         )
         parseLabelJson(rawText)
@@ -671,8 +751,7 @@ class GeminiAiRepository {
             bitmap = bitmap,
             prompt = prompt,
             taskLabel = "صورة الوجبة",
-            primaryModel = foodsPrimary,
-            fallbackModel = foodsFallback,
+            models = mealPhotoModels,
             highDetailJpeg = false,
             onProgress = onProgress
         )
@@ -701,8 +780,7 @@ class GeminiAiRepository {
         val rawText = executeTextJson(
             prompt = prompt,
             taskLabel = "وصف الوجبة",
-            primaryModel = foodsPrimary,
-            fallbackModel = foodsFallback,
+            models = mealTextModels,
             onProgress = onProgress
         )
         parseDetectedFoods(rawText)
@@ -717,8 +795,7 @@ class GeminiAiRepository {
             bitmap = bitmap,
             prompt = prompt,
             taskLabel = "رقم الباركود",
-            primaryModel = barcodePrimary,
-            fallbackModel = barcodeFallback,
+            models = barcodeModels,
             highDetailJpeg = true,
             onProgress = onProgress
         )
@@ -751,8 +828,7 @@ class GeminiAiRepository {
         val rawText = executeTextJson(
             prompt = prompt,
             taskLabel = "اقتراحات سد نقص الميكروز",
-            primaryModel = deficiencyPrimary,
-            fallbackModel = deficiencyFallback,
+            models = deficiencyModels,
             onProgress = onProgress
         )
         val json = JSONObject(rawText)
@@ -812,8 +888,7 @@ class GeminiAiRepository {
         val rawText = executeTextJson(
             prompt = prompt,
             taskLabel = "تقرير المدرب الذكي",
-            primaryModel = coachPrimary,
-            fallbackModel = coachFallback,
+            models = weeklyCoachModels,
             onProgress = onProgress
         )
         val json = JSONObject(rawText)
@@ -861,8 +936,7 @@ class GeminiAiRepository {
         val rawText = executeTextJson(
             prompt = prompt,
             taskLabel = "خطة ما قبل التمرين",
-            primaryModel = preWorkoutPrimary,
-            fallbackModel = preWorkoutFallback,
+            models = preWorkoutModels,
             onProgress = onProgress
         )
         val json = JSONObject(rawText)
@@ -960,8 +1034,7 @@ class GeminiAiRepository {
             requestContents = contents,
             taskLabel = if (jpegBytes != null) "الصورة وسؤالك" else "رد المدرب الذكي",
             imageKb = imageKb,
-            primaryModel = coachChatPrimary,
-            fallbackModel = coachChatFallback,
+            models = coachChatModels,
             onProgress = onProgress
         )
         val json = JSONObject(rawText)
@@ -1037,8 +1110,7 @@ class GeminiAiRepository {
         val rawText = executeTextJson(
             prompt = prompt,
             taskLabel = "تقفيل باقي الماكروز",
-            primaryModel = macroTetrisPrimary,
-            fallbackModel = macroTetrisFallback,
+            models = macroTetrisModels,
             onProgress = onProgress
         )
         val json = JSONObject(rawText)
@@ -1075,8 +1147,7 @@ class GeminiAiRepository {
         bitmap: Bitmap,
         prompt: String,
         taskLabel: String,
-        primaryModel: GenerativeModel,
-        fallbackModel: GenerativeModel,
+        models: ModelPair,
         highDetailJpeg: Boolean,
         onProgress: (String) -> Unit
     ): String {
@@ -1093,8 +1164,7 @@ class GeminiAiRepository {
             requestContents = listOf(requestContent),
             taskLabel = taskLabel,
             imageKb = imageKb,
-            primaryModel = primaryModel,
-            fallbackModel = fallbackModel,
+            models = models,
             onProgress = onProgress
         )
     }
@@ -1102,8 +1172,7 @@ class GeminiAiRepository {
     private suspend fun executeTextJson(
         prompt: String,
         taskLabel: String,
-        primaryModel: GenerativeModel,
-        fallbackModel: GenerativeModel,
+        models: ModelPair,
         onProgress: (String) -> Unit
     ): String {
         val requestContent = content { text(prompt) }
@@ -1111,41 +1180,79 @@ class GeminiAiRepository {
             requestContents = listOf(requestContent),
             taskLabel = taskLabel,
             imageKb = null,
-            primaryModel = primaryModel,
-            fallbackModel = fallbackModel,
+            models = models,
             onProgress = onProgress
         )
     }
+
+    private fun isQuotaErrorChain(lowerErr: String): Boolean =
+        lowerErr.contains("429") ||
+            lowerErr.contains("quota") ||
+            lowerErr.contains("resource_exhausted")
+
+    private fun recordQuotaCooldown(modelName: String, lowerErr: String) {
+        val cooldownMs = if (
+            lowerErr.contains("per day") ||
+            lowerErr.contains("free_tier_requests") ||
+            lowerErr.contains("perday")
+        ) {
+            DAILY_QUOTA_COOLDOWN_MS
+        } else {
+            RPM_QUOTA_COOLDOWN_MS
+        }
+        quotaCooldownUntilMs[modelName] = System.currentTimeMillis() + cooldownMs
+        Log.w(TAG, "Marked $modelName on quota cooldown for ${cooldownMs / 1000}s")
+    }
+
+    private fun timeoutFor(modelName: String, hasImage: Boolean): Long =
+        if (modelName == PRIMARY_MODEL_NAME) {
+            if (hasImage) PRIMARY_IMAGE_TIMEOUT_MS else PRIMARY_TEXT_TIMEOUT_MS
+        } else {
+            if (hasImage) FALLBACK_IMAGE_TIMEOUT_MS else FALLBACK_TEXT_TIMEOUT_MS
+        }
 
     private suspend fun executeWithAppCheckAndFallback(
         requestContents: List<Content>,
         taskLabel: String,
         imageKb: Int?,
-        primaryModel: GenerativeModel,
-        fallbackModel: GenerativeModel,
+        models: ModelPair,
         onProgress: (String) -> Unit
     ): String {
         val stepPrefix = if (imageKb != null) "2/2" else "1/1"
         val sizeSuffix = if (imageKb != null) " (${imageKb} KB)" else ""
-        val primaryTimeoutMs = if (imageKb != null) PRIMARY_IMAGE_TIMEOUT_MS else PRIMARY_TEXT_TIMEOUT_MS
+        val hasImage = imageKb != null
+
+        val now = System.currentTimeMillis()
+        val primaryOnCooldown = (quotaCooldownUntilMs[models.primaryName] ?: 0L) > now
+        val fallbackOnCooldown = (quotaCooldownUntilMs[models.fallbackName] ?: 0L) > now
+
+        // If the preferred primary model recently hit its daily/minute Free Tier limit, skip straight
+        // to the healthy backup model to avoid stalling on a guaranteed QuotaExceededException.
+        val swapOrder = primaryOnCooldown && !fallbackOnCooldown
+        val firstModel = if (swapOrder) models.fallback else models.primary
+        val firstName = if (swapOrder) models.fallbackName else models.primaryName
+        val secondModel = if (swapOrder) models.primary else models.fallback
+        val secondName = if (swapOrder) models.primaryName else models.fallbackName
+
+        val firstTimeoutMs = timeoutFor(firstName, hasImage)
         onProgress("$stepPrefix جاري تحليل $taskLabel بـ Gemini$sizeSuffix...")
 
-        val primaryAttempt = generateJsonAttempt(
-            model = primaryModel,
-            modelName = PRIMARY_MODEL_NAME,
+        val firstAttempt = generateJsonAttempt(
+            model = firstModel,
+            modelName = firstName,
             requestContents = requestContents,
-            timeoutMs = primaryTimeoutMs
+            timeoutMs = firstTimeoutMs
         )
-        if (primaryAttempt.text != null) {
-            return primaryAttempt.text
+        if (firstAttempt.text != null) {
+            return firstAttempt.text
         }
 
-        val primaryErrLower = primaryAttempt.errorChain.lowercase()
-        val isAppCheckError = primaryErrLower.contains("app check") ||
-            primaryErrLower.contains("appcheck") ||
-            primaryErrLower.contains("recaptcha") ||
-            primaryErrLower.contains("attestation") ||
-            primaryErrLower.contains("403")
+        val firstErrLower = firstAttempt.errorChain.lowercase()
+        val isAppCheckError = firstErrLower.contains("app check") ||
+            firstErrLower.contains("appcheck") ||
+            firstErrLower.contains("recaptcha") ||
+            firstErrLower.contains("attestation") ||
+            firstErrLower.contains("403")
 
         if (isAppCheckError) {
             val isPersonalDebugBuild = BuildConfig.DEBUG && !localPhoneDebugToken.isNullOrBlank()
@@ -1171,16 +1278,16 @@ class GeminiAiRepository {
 
             if (tokenReady) {
                 val retryAttempt = generateJsonAttempt(
-                    model = primaryModel,
-                    modelName = PRIMARY_MODEL_NAME,
+                    model = firstModel,
+                    modelName = firstName,
                     requestContents = requestContents,
-                    timeoutMs = primaryTimeoutMs
+                    timeoutMs = firstTimeoutMs
                 )
                 if (retryAttempt.text != null) {
                     return retryAttempt.text
                 }
                 throw GeminiStreamStageException(
-                    primaryModel = PRIMARY_MODEL_NAME,
+                    primaryModel = firstName,
                     primarySummary = retryAttempt.summary,
                     fallbackModel = null,
                     fallbackSummary = null,
@@ -1191,52 +1298,51 @@ class GeminiAiRepository {
                 )
             }
             throw GeminiStreamStageException(
-                primaryModel = PRIMARY_MODEL_NAME,
-                primarySummary = primaryAttempt.summary,
+                primaryModel = firstName,
+                primarySummary = firstAttempt.summary,
                 fallbackModel = null,
                 fallbackSummary = null,
                 imageKb = imageKb,
-                anyTimedOut = primaryAttempt.timedOut,
+                anyTimedOut = firstAttempt.timedOut,
                 appCheckDiag = fullDiag,
-                cause = primaryAttempt.error
+                cause = firstAttempt.error
             )
         }
 
-        val isQuotaError = primaryErrLower.contains("429") ||
-            primaryErrLower.contains("quota") ||
-            primaryErrLower.contains("resource_exhausted")
-
-        if (isQuotaError) {
-            throw GeminiStreamStageException(
-                primaryModel = PRIMARY_MODEL_NAME,
-                primarySummary = primaryAttempt.summary,
-                fallbackModel = null,
-                fallbackSummary = null,
-                imageKb = imageKb,
-                anyTimedOut = primaryAttempt.timedOut,
-                cause = primaryAttempt.error
-            )
+        // Each Gemini model has its own independent Free Tier quota bucket:
+        // when the first model hits 429/QuotaExceededException, remember its cooldown and
+        // immediately fall back to the backup model instead of failing the user's request!
+        val firstWasQuota = isQuotaErrorChain(firstErrLower)
+        if (firstWasQuota) {
+            recordQuotaCooldown(firstName, firstErrLower)
+            onProgress("$stepPrefix النموذج الأساسي وصل للحد المجاني، جاري التحويل تلقائيًا لـ $secondName...")
+        } else {
+            onProgress("$stepPrefix جاري المحاولة بالنموذج البديل ($secondName)...")
         }
 
-        onProgress("$stepPrefix جاري المحاولة بنموذج Gemini السريع (flash-lite)...")
-        val fallbackAttempt = generateJsonAttempt(
-            model = fallbackModel,
-            modelName = FALLBACK_MODEL_NAME,
+        val secondAttempt = generateJsonAttempt(
+            model = secondModel,
+            modelName = secondName,
             requestContents = requestContents,
-            timeoutMs = FALLBACK_TIMEOUT_MS
+            timeoutMs = timeoutFor(secondName, hasImage)
         )
-        if (fallbackAttempt.text != null) {
-            return fallbackAttempt.text
+        if (secondAttempt.text != null) {
+            return secondAttempt.text
+        }
+
+        val secondErrLower = secondAttempt.errorChain.lowercase()
+        if (isQuotaErrorChain(secondErrLower)) {
+            recordQuotaCooldown(secondName, secondErrLower)
         }
 
         throw GeminiStreamStageException(
-            primaryModel = PRIMARY_MODEL_NAME,
-            primarySummary = primaryAttempt.summary,
-            fallbackModel = FALLBACK_MODEL_NAME,
-            fallbackSummary = fallbackAttempt.summary,
+            primaryModel = firstName,
+            primarySummary = firstAttempt.summary,
+            fallbackModel = secondName,
+            fallbackSummary = secondAttempt.summary,
             imageKb = imageKb,
-            anyTimedOut = primaryAttempt.timedOut || fallbackAttempt.timedOut,
-            cause = fallbackAttempt.error ?: primaryAttempt.error
+            anyTimedOut = firstAttempt.timedOut || secondAttempt.timedOut,
+            cause = secondAttempt.error ?: firstAttempt.error
         )
     }
 
@@ -1475,11 +1581,15 @@ class GeminiAiRepository {
                 lower.contains("403") || lower.contains("appcheck") || lower.contains("app check") || lower.contains("recaptcha") || lower.contains("attestation") ->
                     "رفض الخادم التحقق الأمني (App Check / reCAPTCHA) عند الاتصال بـ Gemini."
 
+                (lower.contains("429") || lower.contains("quota") || lower.contains("resource_exhausted")) &&
+                    (lower.contains("per day") || lower.contains("free_tier_requests") || lower.contains("perday")) ->
+                    "تم استهلاك الحد اليومي المجاني (Free Tier) لنماذج Gemini على المشروع. الحد بيتصفّر تلقائيًا بعد الوقت الموضح بالأسفل، أو تقدر ترفعه بتفعيل خطة Blaze في Firebase."
+
                 lower.contains("429") || lower.contains("quota") || lower.contains("resource_exhausted") ->
-                    "تم تجاوز حد الطلبات المؤقت لـ Gemini. انتظر قليلًا ثم جرّب مرة أخرى."
+                    "تم تجاوز حد الطلبات المؤقت لـ Gemini. انتظر دقيقة ثم جرّب مرة تانية."
 
                 error.anyTimedOut ->
-                    "انتهى وقت انتظار رد Gemini (بعد تجربة النموذج الأساسي والسريع). تأكد من الإنترنت وجرّب مرة تانية."
+                    "انتهى وقت انتظار رد Gemini (بعد تجربة النموذج الأساسي والبديل). تأكد من الإنترنت وجرّب مرة تانية."
 
                 lower.contains("unknownhost") || lower.contains("connect") || lower.contains("network") || lower.contains("socket") ->
                     "مشكلة في اتصال الإنترنت أثناء الإرسال إلى Gemini."
@@ -1499,8 +1609,12 @@ class GeminiAiRepository {
             lower.contains("403") || lower.contains("appcheck") || lower.contains("app check") || lower.contains("recaptcha") || lower.contains("attestation") ->
                 "تعذّر التحقق الأمني (App Check / reCAPTCHA) أثناء الاتصال بـ Gemini."
 
+            (lower.contains("429") || lower.contains("quota") || lower.contains("resource_exhausted")) &&
+                (lower.contains("per day") || lower.contains("free_tier_requests") || lower.contains("perday")) ->
+                "تم استهلاك الحد اليومي المجاني (Free Tier) لنماذج Gemini. الحد بيتصفّر تلقائيًا بعد الوقت الموضح بالأسفل."
+
             lower.contains("429") || lower.contains("quota") || lower.contains("resource_exhausted") ->
-                "تم تجاوز حد الطلبات المؤقت لـ Gemini. انتظر قليلًا ثم جرّب مرة أخرى."
+                "تم تجاوز حد الطلبات المؤقت لـ Gemini. انتظر دقيقة ثم جرّب مرة تانية."
 
             lower.contains("unknownhost") || lower.contains("connect") || lower.contains("network") || lower.contains("socket") ->
                 "مشكلة في اتصال الإنترنت أثناء الإرسال إلى Gemini."

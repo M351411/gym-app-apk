@@ -2,24 +2,44 @@ package com.mutabei.workout.ui.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.EmojiEvents
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material.icons.rounded.TrackChanges
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -34,11 +54,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -46,6 +71,7 @@ import com.mutabei.workout.data.model.ExerciseSpec
 import com.mutabei.workout.data.model.SetEntry
 import com.mutabei.workout.ui.theme.LocalSemanticColors
 import com.mutabei.workout.ui.viewmodel.ExerciseHistoryPoint
+import com.mutabei.workout.ui.viewmodel.WorkoutSessionTimerState
 import kotlin.math.floor
 import kotlin.math.roundToInt
 
@@ -97,6 +123,388 @@ fun computeDoubleProgression(
                 suggestedWeightKg = topWeight,
                 message = "هدف النهارده: ثبّت $topStr كجم وزوّد عدة على الأقل فوق آخر جلسة."
             )
+        }
+    }
+}
+
+enum class SetGoalKind { INCREASE, PROGRESS, HOLD_OR_FIX, FIRST_SESSION }
+
+data class SetTargetGoal(
+    val setNumber: Int,
+    val kind: SetGoalKind,
+    val title: String,
+    val targetLine: String,
+    val detailLine: String,
+    val suggestedWeightKg: Double?
+)
+
+private fun fmtWeightKg(w: Double): String =
+    if (w % 1.0 == 0.0) w.toInt().toString() else w.toString()
+
+fun computeSetTargetGoal(
+    spec: ExerciseSpec,
+    lastSession: ExerciseHistoryPoint?,
+    setIndex: Int,
+    overallAdvice: DoubleProgressionAdvice?
+): SetTargetGoal {
+    val setNum = setIndex + 1
+    val prevSet = lastSession?.sets?.getOrNull(setIndex)
+        ?.takeIf { it.weightDouble() > 0.0 && it.repsDouble() > 0.0 }
+        ?: lastSession?.sets?.lastOrNull { it.weightDouble() > 0.0 && it.repsDouble() > 0.0 }
+
+    if (prevSet == null) {
+        return SetTargetGoal(
+            setNumber = setNum,
+            kind = SetGoalKind.FIRST_SESSION,
+            title = "هدف المجموعة $setNum",
+            targetLine = "${spec.minReps}–${spec.maxReps} عدات",
+            detailLine = "أول مرة تسجّل المجموعة دي — اختار وزن مناسب بتكنيك مضبوط وجيب ${spec.minReps}–${spec.maxReps} عدات.",
+            suggestedWeightKg = null
+        )
+    }
+
+    val prevW = prevSet.weightDouble()
+    val prevR = prevSet.repsInt()
+    val step = if (prevW >= 20.0) 2.5 else 1.25
+    val nextW = ((prevW + step) * 100.0).roundToInt() / 100.0
+    val lowerW = (prevW - step).coerceAtLeast(2.5)
+    val prevLabel = "${fmtWeightKg(prevW)} كجم × $prevR"
+
+    return when {
+        overallAdvice?.readyToIncrease == true -> {
+            val targetW = overallAdvice.suggestedWeightKg ?: nextW
+            SetTargetGoal(
+                setNumber = setNum,
+                kind = SetGoalKind.INCREASE,
+                title = "هدف المجموعة $setNum",
+                targetLine = "${fmtWeightKg(targetW)} كجم × ${spec.minReps}–${spec.maxReps} عدات",
+                detailLine = "كسرت الرينج المرة اللي فاتت ($prevLabel) — ارفع الوزن لـ ${fmtWeightKg(targetW)} كجم النهارده!",
+                suggestedWeightKg = targetW
+            )
+        }
+
+        prevR >= spec.maxReps -> {
+            SetTargetGoal(
+                setNumber = setNum,
+                kind = SetGoalKind.INCREASE,
+                title = "هدف المجموعة $setNum",
+                targetLine = "${fmtWeightKg(nextW)} كجم × ${spec.minReps}–${spec.maxReps} أو ${fmtWeightKg(prevW)} × ${spec.maxReps}",
+                detailLine = "المجموعة دي وصلت لأقصى عدات ($prevLabel) — جرّب ترفع لـ ${fmtWeightKg(nextW)} كجم أو حافظ على ${spec.maxReps} عدات.",
+                suggestedWeightKg = nextW
+            )
+        }
+
+        prevR < spec.minReps -> {
+            SetTargetGoal(
+                setNumber = setNum,
+                kind = SetGoalKind.HOLD_OR_FIX,
+                title = "هدف المجموعة $setNum",
+                targetLine = "${fmtWeightKg(prevW)} كجم × ${spec.minReps} عدات (أو ${fmtWeightKg(lowerW)} كجم)",
+                detailLine = "العدات كانت تحت الرينج ($prevLabel) — ثبّت التكنيك أو خفّف لـ ${fmtWeightKg(lowerW)} كجم وجيب ${spec.minReps}–${spec.maxReps}.",
+                suggestedWeightKg = lowerW
+            )
+        }
+
+        else -> {
+            val nextR = (prevR + 1).coerceAtMost(spec.maxReps)
+            SetTargetGoal(
+                setNumber = setNum,
+                kind = SetGoalKind.PROGRESS,
+                title = "هدف المجموعة $setNum",
+                targetLine = "${fmtWeightKg(prevW)} كجم × $nextR عدات",
+                detailLine = "ثبّت ${fmtWeightKg(prevW)} كجم وزوّد عدة على الأقل عن آخر مرة ($prevLabel).",
+                suggestedWeightKg = prevW
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun SetGoalTargetIcon(
+    goal: SetTargetGoal,
+    currentSet: SetEntry,
+    minReps: Int,
+    testTag: String,
+    onApplyWeight: (String) -> Unit,
+    onShortTapHint: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val semantic = LocalSemanticColors.current
+    val haptic = LocalHapticFeedback.current
+    var expanded by remember { mutableStateOf(false) }
+
+    val achievedToday = remember(currentSet, goal, minReps) {
+        val w = currentSet.weightDouble()
+        val r = currentSet.repsInt()
+        val targetW = goal.suggestedWeightKg
+        if (w <= 0.0 || r <= 0) false
+        else if (targetW != null) w >= targetW && r >= minReps
+        else r >= minReps
+    }
+
+    val accent = when {
+        achievedToday -> semantic.ok
+        goal.kind == SetGoalKind.INCREASE -> semantic.ok
+        goal.kind == SetGoalKind.HOLD_OR_FIX -> semantic.warn
+        goal.kind == SetGoalKind.PROGRESS -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Box(modifier = modifier) {
+        Surface(
+            shape = CircleShape,
+            color = accent.copy(alpha = if (achievedToday) 0.22f else 0.12f),
+            border = BorderStroke(1.dp, accent.copy(alpha = 0.55f)),
+            modifier = Modifier
+                .size(38.dp)
+                .clip(CircleShape)
+                .combinedClickable(
+                    onClick = onShortTapHint,
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        expanded = true
+                    }
+                )
+                .semantics { contentDescription = "اضغط مطولاً لعرض ${goal.title}" }
+                .testTag(testTag)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = if (goal.kind == SetGoalKind.INCREASE && !achievedToday) {
+                        Icons.Rounded.ArrowUpward
+                    } else {
+                        Icons.Rounded.TrackChanges
+                    },
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(19.dp)
+                )
+            }
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, accent.copy(alpha = 0.55f)),
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.widthIn(min = 230.dp, max = 300.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.TrackChanges,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = goal.title,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = accent
+                    )
+                }
+                Surface(
+                    shape = MaterialTheme.shapes.small,
+                    color = accent.copy(alpha = 0.12f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = goal.targetLine,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+                Text(
+                    text = goal.detailLine,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (goal.suggestedWeightKg != null) {
+                    val wStr = fmtWeightKg(goal.suggestedWeightKg)
+                    OutlinedButton(
+                        onClick = {
+                            onApplyWeight(wStr)
+                            expanded = false
+                        },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "طبّق $wStr كجم في المجموعة ${goal.setNumber}",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+fun formatWorkoutElapsed(seconds: Long): String {
+    val safe = seconds.coerceAtLeast(0L)
+    val h = safe / 3600L
+    val m = (safe % 3600L) / 60L
+    val s = safe % 60L
+    return if (h > 0L) {
+        "$h:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}"
+    } else {
+        "${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}"
+    }
+}
+
+@Composable
+fun WorkoutSessionTimerBar(
+    state: WorkoutSessionTimerState,
+    onToggle: () -> Unit,
+    onReset: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val semantic = LocalSemanticColors.current
+    val accent = when {
+        state.isRunning -> semantic.ok
+        state.hasStarted -> semantic.warn
+        else -> MaterialTheme.colorScheme.primary
+    }
+    val statusText = when {
+        state.isRunning -> "وقت التمرينة · شغّال"
+        state.hasStarted -> "وقت التمرينة · متوقف مؤقتًا"
+        else -> "تايمر وقت التمرينة"
+    }
+
+    Card(
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(
+            containerColor = if (state.isRunning) {
+                semantic.ok.copy(alpha = 0.09f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+        ),
+        border = BorderStroke(
+            width = if (state.isRunning) 1.5.dp else 1.dp,
+            color = if (state.isRunning) semantic.ok.copy(alpha = 0.65f) else MaterialTheme.colorScheme.outline
+        ),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("workout_session_timer_bar")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = accent.copy(alpha = 0.16f),
+                    modifier = Modifier.size(38.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Rounded.Timer,
+                            contentDescription = null,
+                            tint = accent,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Column {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(accent)
+                        )
+                        Text(
+                            text = statusText,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = formatWorkoutElapsed(state.elapsedSeconds),
+                        style = MaterialTheme.typography.titleLarge.copy(fontFeatureSettings = "tnum"),
+                        fontWeight = FontWeight.ExtraBold,
+                        color = if (state.isRunning) accent else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.testTag("workout_session_timer_value")
+                    )
+                }
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (state.hasStarted || state.elapsedSeconds > 0L) {
+                    IconButton(
+                        onClick = onReset,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("workout_timer_reset")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Refresh,
+                            contentDescription = "تصفير تايمر التمرينة",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                Button(
+                    onClick = onToggle,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (state.isRunning) {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                        contentColor = if (state.isRunning) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onPrimary
+                        }
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier.testTag("workout_timer_toggle")
+                ) {
+                    Icon(
+                        imageVector = if (state.isRunning) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = when {
+                            state.isRunning -> "إيقاف"
+                            state.hasStarted -> "استكمال"
+                            else -> "ابدأ"
+                        },
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
         }
     }
 }

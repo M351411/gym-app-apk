@@ -74,6 +74,12 @@ data class RestTimerState(
     val finished: Boolean = false
 )
 
+data class WorkoutSessionTimerState(
+    val isRunning: Boolean = false,
+    val elapsedSeconds: Long = 0L,
+    val hasStarted: Boolean = false
+)
+
 data class AppDataSnapshot(
     val config: UserConfig = UserConfig(),
     val sessions: Map<String, WorkoutSession> = emptyMap(),
@@ -230,6 +236,13 @@ class MainViewModel(
     val restTimer: StateFlow<RestTimerState> = _restTimer.asStateFlow()
     private var timerJob: Job? = null
 
+    private val _workoutSessionTimer = MutableStateFlow(WorkoutSessionTimerState())
+    val workoutSessionTimer: StateFlow<WorkoutSessionTimerState> = _workoutSessionTimer.asStateFlow()
+    private var workoutTimerJob: Job? = null
+    private var workoutTimerAccumulatedMs: Long = 0L
+    private var workoutTimerStartedEpochMs: Long? = null
+    private var workoutTimerManuallyControlled: Boolean = false
+
     private val _timerFinishedEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val timerFinishedEvents: SharedFlow<Unit> = _timerFinishedEvents.asSharedFlow()
 
@@ -304,6 +317,7 @@ class MainViewModel(
     // ==================== REST TIMER ====================
 
     fun startRestTimer(seconds: Int? = null) {
+        startWorkoutSessionTimer(autoTriggered = true)
         val dur = (seconds ?: currentSnapshot().config.restSeconds).coerceIn(30, 900)
         val endTimeMs = System.currentTimeMillis() + dur * 1000L
         _restTimer.value = RestTimerState(
@@ -371,6 +385,73 @@ class MainViewModel(
         }
     }
 
+    // ==================== WORKOUT SESSION TIMER ====================
+
+    fun startWorkoutSessionTimer(autoTriggered: Boolean = false) {
+        val current = _workoutSessionTimer.value
+        if (current.isRunning) return
+        if (autoTriggered && (current.hasStarted || workoutTimerManuallyControlled)) return
+        if (!autoTriggered) {
+            workoutTimerManuallyControlled = true
+        }
+        val startedAt = System.currentTimeMillis()
+        workoutTimerStartedEpochMs = startedAt
+        _workoutSessionTimer.value = WorkoutSessionTimerState(
+            isRunning = true,
+            elapsedSeconds = workoutTimerAccumulatedMs / 1000L,
+            hasStarted = true
+        )
+        workoutTimerJob?.cancel()
+        workoutTimerJob = viewModelScope.launch {
+            while (true) {
+                val anchor = workoutTimerStartedEpochMs ?: break
+                val totalMs = workoutTimerAccumulatedMs + (System.currentTimeMillis() - anchor).coerceAtLeast(0L)
+                _workoutSessionTimer.value = WorkoutSessionTimerState(
+                    isRunning = true,
+                    elapsedSeconds = totalMs / 1000L,
+                    hasStarted = true
+                )
+                delay(500L)
+            }
+        }
+    }
+
+    fun pauseWorkoutSessionTimer() {
+        val anchor = workoutTimerStartedEpochMs
+        if (anchor != null) {
+            workoutTimerAccumulatedMs += (System.currentTimeMillis() - anchor).coerceAtLeast(0L)
+            workoutTimerStartedEpochMs = null
+        }
+        workoutTimerManuallyControlled = true
+        workoutTimerJob?.cancel()
+        _workoutSessionTimer.value = WorkoutSessionTimerState(
+            isRunning = false,
+            elapsedSeconds = workoutTimerAccumulatedMs / 1000L,
+            hasStarted = workoutTimerAccumulatedMs > 0L || _workoutSessionTimer.value.hasStarted
+        )
+    }
+
+    fun toggleWorkoutSessionTimer() {
+        if (_workoutSessionTimer.value.isRunning) {
+            pauseWorkoutSessionTimer()
+        } else {
+            startWorkoutSessionTimer(autoTriggered = false)
+        }
+    }
+
+    fun resetWorkoutSessionTimer() {
+        workoutTimerJob?.cancel()
+        workoutTimerStartedEpochMs = null
+        workoutTimerAccumulatedMs = 0L
+        workoutTimerManuallyControlled = true
+        _workoutSessionTimer.value = WorkoutSessionTimerState(
+            isRunning = false,
+            elapsedSeconds = 0L,
+            hasStarted = false
+        )
+        showToast("تم تصفير تايمر التمرينة")
+    }
+
     // ==================== CONFIG & SETTINGS ====================
 
     fun updateConfig(updated: UserConfig) {
@@ -391,6 +472,9 @@ class MainViewModel(
     // ==================== WORKOUTS ====================
 
     fun updateDraftSet(dayIndex: Int, exIndex: Int, setIndex: Int, setCount: Int, baseSets: List<SetEntry>, weight: String? = null, reps: String? = null) {
+        if (!weight.isNullOrBlank() || !reps.isNullOrBlank()) {
+            startWorkoutSessionTimer(autoTriggered = true)
+        }
         val key = "$dayIndex|$exIndex"
         _workoutDrafts.update { map ->
             val current = map[key]?.toMutableList() ?: baseSets.toMutableList()

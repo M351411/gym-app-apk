@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.PhotoLibrary
@@ -31,6 +32,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -389,91 +391,128 @@ fun RestTimerOverlay(
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .testTag("rest_timer_overlay")
     ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Box(
-                modifier = Modifier.size(86.dp),
-                contentAlignment = Alignment.Center
+        Box(modifier = Modifier.fillMaxWidth()) {
+            // Compact small X close button in top-end corner (replaces "تخطي")
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(2.dp)
+                    .size(34.dp)
+                    .testTag("timer_skip")
             ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val stroke = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round)
-                    drawArc(
-                        color = trackColor,
-                        startAngle = 0f,
-                        sweepAngle = 360f,
-                        useCenter = false,
-                        style = stroke
-                    )
-                    drawArc(
-                        color = ringColor,
-                        startAngle = -90f,
-                        sweepAngle = if (state.finished) 360f else 360f * progress,
-                        useCenter = false,
-                        style = stroke
-                    )
-                }
-                val timeLabel = if (state.finished) {
-                    "يلا"
-                } else {
-                    val m = state.remainingSeconds / 60
-                    val s = state.remainingSeconds % 60
-                    "$m:${s.toString().padStart(2, '0')}"
-                }
-                Text(
-                    text = timeLabel,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = if (state.finished) semantic.ok else MaterialTheme.colorScheme.onSurface
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = stringResource(R.string.cd_close),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
                 )
             }
 
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    text = if (state.finished) "الراحة خلصت. ابدأ المجموعة!" else "استريح",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = if (state.finished) semantic.ok else MaterialTheme.colorScheme.onSurface
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedButton(
-                        onClick = { onAdjust(-30) },
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                        modifier = Modifier.testTag("timer_minus_30")
-                    ) { Text("-30") }
-                    OutlinedButton(
-                        onClick = { onAdjust(30) },
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                        modifier = Modifier.testTag("timer_plus_30")
-                    ) { Text("+30") }
-                    Button(
-                        onClick = onDismiss,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.onSurface,
-                            contentColor = MaterialTheme.colorScheme.surface
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(86.dp)
+                        .clip(CircleShape)
+                        .then(
+                            if (state.finished) {
+                                Modifier
+                                    .background(semantic.ok.copy(alpha = 0.14f))
+                                    .clickable(onClick = onDismiss)
+                                    .semantics { contentDescription = "يلا - إغلاق مؤقت الراحة" }
+                                    .testTag("timer_go_dismiss")
+                            } else {
+                                Modifier
+                            }
                         ),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                        modifier = Modifier.testTag("timer_skip")
-                    ) { Text("تخطي") }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(120, 180, 240, 300).forEach { sec ->
-                        val active = sec == defaultPresetSeconds
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.background,
-                            border = BorderStroke(1.dp, if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline),
-                            modifier = Modifier
-                                .clickable { onSelectPreset(sec) }
-                                .testTag("timer_preset_${sec / 60}")
-                        ) {
+                    contentAlignment = Alignment.Center
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val stroke = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round)
+                        drawArc(
+                            color = trackColor,
+                            startAngle = 0f,
+                            sweepAngle = 360f,
+                            useCenter = false,
+                            style = stroke
+                        )
+                        drawArc(
+                            color = ringColor,
+                            startAngle = -90f,
+                            sweepAngle = if (state.finished) 360f else 360f * progress,
+                            useCenter = false,
+                            style = stroke
+                        )
+                    }
+                    if (state.finished) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
-                                text = "${sec / 60} د",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                text = "يلا",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = semantic.ok
                             )
+                            Text(
+                                text = "اضغط",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = semantic.ok.copy(alpha = 0.85f)
+                            )
+                        }
+                    } else {
+                        val m = state.remainingSeconds / 60
+                        val s = state.remainingSeconds % 60
+                        Text(
+                            text = "$m:${s.toString().padStart(2, '0')}",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = if (state.finished) "الراحة خلصت. اضغط «يلا» للمجموعة الجاية!" else "استريح",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = if (state.finished) semantic.ok else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(end = 28.dp)
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { onAdjust(-30) },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                            modifier = Modifier.testTag("timer_minus_30")
+                        ) { Text("-30") }
+                        OutlinedButton(
+                            onClick = { onAdjust(30) },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                            modifier = Modifier.testTag("timer_plus_30")
+                        ) { Text("+30") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(120, 180, 240, 300).forEach { sec ->
+                            val active = sec == defaultPresetSeconds
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.background,
+                                border = BorderStroke(1.dp, if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline),
+                                modifier = Modifier
+                                    .clickable { onSelectPreset(sec) }
+                                    .testTag("timer_preset_${sec / 60}")
+                            ) {
+                                Text(
+                                    text = "${sec / 60} د",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
                         }
                     }
                 }

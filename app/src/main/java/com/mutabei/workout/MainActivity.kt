@@ -15,7 +15,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -26,7 +28,10 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.FitnessCenter
@@ -61,11 +66,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -88,6 +95,7 @@ import com.mutabei.workout.data.repository.OfflineFoodRepository
 import com.mutabei.workout.data.repository.OpenFoodFactsRepository
 import com.mutabei.workout.ui.components.RestTimerFab
 import com.mutabei.workout.ui.components.RestTimerOverlay
+import com.mutabei.workout.ui.components.formatWorkoutElapsed
 import com.mutabei.workout.ui.screens.AiCoachHubSheet
 import com.mutabei.workout.ui.screens.AuthScreen
 import com.mutabei.workout.ui.screens.BodyScreen
@@ -101,6 +109,7 @@ import com.mutabei.workout.ui.viewmodel.AiMacroTetrisUiState
 import com.mutabei.workout.ui.viewmodel.AppDataSnapshot
 import com.mutabei.workout.ui.viewmodel.MainTab
 import com.mutabei.workout.ui.viewmodel.MainViewModel
+import com.mutabei.workout.ui.viewmodel.WorkoutSessionTimerState
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -193,6 +202,7 @@ private fun MainAppShell(user: FirebaseUser) {
     val selectedNutritionDate by viewModel.selectedNutritionDate.collectAsStateWithLifecycle()
     val workoutDrafts by viewModel.workoutDrafts.collectAsStateWithLifecycle()
     val restTimer by viewModel.restTimer.collectAsStateWithLifecycle()
+    val workoutTimer by viewModel.workoutSessionTimer.collectAsStateWithLifecycle()
     val searchResults by viewModel.searchResults.collectAsStateWithLifecycle()
     val foodSheetAi by viewModel.foodSheetAi.collectAsStateWithLifecycle()
     val bodyDraft by viewModel.bodyDraft.collectAsStateWithLifecycle()
@@ -318,6 +328,44 @@ private fun MainAppShell(user: FirebaseUser) {
                                 }
                             },
                             actions = {
+                                if (snapshot != null && workoutTimer.hasStarted) {
+                                    val timerAccent = if (workoutTimer.isRunning) semantic.ok else semantic.warn
+                                    Surface(
+                                        shape = RoundedCornerShape(99.dp),
+                                        color = timerAccent.copy(alpha = 0.14f),
+                                        border = BorderStroke(1.dp, timerAccent.copy(alpha = 0.6f)),
+                                        modifier = Modifier
+                                            .padding(end = 4.dp)
+                                            .clip(RoundedCornerShape(99.dp))
+                                            .clickable {
+                                                if (selectedTab != MainTab.WORKOUT) {
+                                                    viewModel.selectTab(MainTab.WORKOUT)
+                                                } else {
+                                                    viewModel.toggleWorkoutSessionTimer()
+                                                }
+                                            }
+                                            .testTag("topbar_workout_timer_pill")
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(7.dp)
+                                                    .clip(CircleShape)
+                                                    .background(timerAccent)
+                                            )
+                                            Text(
+                                                text = formatWorkoutElapsed(workoutTimer.elapsedSeconds),
+                                                style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = timerAccent
+                                            )
+                                        }
+                                    }
+                                }
                                 if (snapshot != null) {
                                     IconButton(
                                         onClick = { showCoachDialog = true },
@@ -436,6 +484,7 @@ private fun MainAppShell(user: FirebaseUser) {
                                         selectedDayIndex = selectedDayIndex,
                                         selectedNutritionDate = selectedNutritionDate,
                                         workoutDrafts = workoutDrafts,
+                                        workoutTimer = workoutTimer,
                                         searchResults = searchResults,
                                         foodSheetAi = foodSheetAi,
                                         bodyDraft = bodyDraft,
@@ -484,6 +533,7 @@ private fun ActiveTabContent(
     selectedDayIndex: Int,
     selectedNutritionDate: String,
     workoutDrafts: Map<String, List<com.mutabei.workout.data.model.SetEntry>>,
+    workoutTimer: WorkoutSessionTimerState,
     searchResults: List<com.mutabei.workout.data.model.FoodItem>,
     foodSheetAi: com.mutabei.workout.ui.viewmodel.FoodSheetAiState,
     bodyDraft: com.mutabei.workout.ui.viewmodel.BodyDraftState,
@@ -499,6 +549,7 @@ private fun ActiveTabContent(
             snapshot = snapshot,
             selectedDayIndex = selectedDayIndex,
             drafts = workoutDrafts,
+            workoutTimer = workoutTimer,
             viewModel = viewModel
         )
 
