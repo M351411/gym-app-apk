@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
@@ -21,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -101,6 +103,10 @@ fun NutritionScreen(
         viewModel.computeTargets(snapshot.config, snapshot.bodyRecords)
     }
 
+    val vitDBreakdown = remember(selectedDate, snapshot.nutritionDays) {
+        NutritionConstants.computeVitaminDBreakdown(selectedDate, snapshot.nutritionDays)
+    }
+
     // Daily totals across all tracked nutrient keys
     val totals = remember(day.items) {
         val count = NutritionConstants.NUTRIENT_COUNT
@@ -117,10 +123,12 @@ fun NutritionScreen(
         sum to has
     }
     fun totalOf(key: String): Double {
+        if (key == "vD") return vitDBreakdown.effectiveMcg
         val idx = NutritionConstants.NUTRIENT_INDEX[key] ?: return 0.0
         return totals.first[idx]
     }
     fun hasDataFor(key: String): Boolean {
+        if (key == "vD" && vitDBreakdown.carryInFromYesterdayMcg > 0.0) return true
         val idx = NutritionConstants.NUTRIENT_INDEX[key] ?: return false
         return totals.second[idx]
     }
@@ -316,10 +324,47 @@ fun NutritionScreen(
                             Spacer(Modifier.height(4.dp))
                             MealLeucineMpsChip(status = leuStatus)
                         }
-                        if (isSupplementSection && mealItems.isEmpty()) {
+                        if (isSupplementSection && vitDBreakdown.carryInIu > 0) {
+                            Spacer(Modifier.height(6.dp))
+                            Surface(
+                                shape = MaterialTheme.shapes.small,
+                                color = semantic.ok.copy(alpha = 0.12f),
+                                border = BorderStroke(1.dp, semantic.ok.copy(alpha = 0.4f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("vitamin_d_carryover_banner")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.WbSunny,
+                                        contentDescription = null,
+                                        tint = semantic.ok,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "فيتامين D مُغطى النهارده تلقائياً (+${vitDBreakdown.carryInIu} IU)",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = semantic.ok
+                                        )
+                                        Text(
+                                            text = "مُرحّل من جرعة أمس (${vitDBreakdown.yesterdaySourceName ?: "دافاليندي"}) — نظام يوم أه ويوم لا",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        if (isSupplementSection && mealItems.isEmpty() && vitDBreakdown.carryInIu == 0) {
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                text = "سجّل الفيتامينات والمكملات (مثل فيتا ستريس، أوميجا 3، باور ماكس) عشان تتحسب تلقائيًا في الميكروز.",
+                                text = "سجّل الفيتامينات والمكملات (مثل دافاليندي، فيتا ستريس، أوميجا 3، باور ماكس) عشان تتحسب تلقائيًا في الميكروز.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -329,6 +374,8 @@ fun NutritionScreen(
                             val microSummary = if (isUnitSupp) {
                                 SupplementCatalog.activeNutrientsSummary(item.nutrients, item.grams, maxItems = 3)
                             } else ""
+                            val triggersVdCarryover = vitDBreakdown.carryOutIu > 0 &&
+                                item.nutrientAmount("vD") > NutritionConstants.VITAMIN_D_DAILY_TARGET_MCG
                             Spacer(Modifier.height(6.dp))
                             Row(
                                 modifier = Modifier
@@ -350,6 +397,14 @@ fun NutritionScreen(
                                         style = MaterialTheme.typography.bodySmall,
                                         color = if (isUnitSupp) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                    if (triggersVdCarryover) {
+                                        Text(
+                                            text = "استثناء فيتامين D: 5000 IU اليوم + ${vitDBreakdown.carryOutIu} IU مُرحّلة لغداً تلقائياً",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = semantic.ok
+                                        )
+                                    }
                                 }
                                 if (!isUnitSupp || item.nutrientAmount("kcal") >= 1.0) {
                                     Text(
@@ -552,6 +607,23 @@ fun NutritionScreen(
                                 target = targetVal,
                                 barColor = if (isLim && v > targetVal) semantic.low else MaterialTheme.colorScheme.primary
                             )
+                            if (k == "vD" && (vitDBreakdown.carryInIu > 0 || vitDBreakdown.carryOutIu > 0)) {
+                                val note = when {
+                                    vitDBreakdown.carryInIu > 0 && vitDBreakdown.carryOutIu > 0 ->
+                                        "استثناء فيتامين D: +${vitDBreakdown.carryInIu} IU من أمس وترحيل ${vitDBreakdown.carryOutIu} IU لغداً"
+                                    vitDBreakdown.carryInIu > 0 ->
+                                        "استثناء فيتامين D: +${vitDBreakdown.carryInIu} IU مُرحّلة من جرعة أمس (يوم أه ويوم لا)"
+                                    else ->
+                                        "استثناء فيتامين D: تم احتساب 5000 IU اليوم وترحيل ${vitDBreakdown.carryOutIu} IU لليوم التالي"
+                                }
+                                Text(
+                                    text = note,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = semantic.ok,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(top = 2.dp)
+                                )
+                            }
                         }
                     }
                     val foodMoisture = totalOf("wat")
@@ -1002,15 +1074,22 @@ private fun WeeklyMicrosCard(
         .sortedBy { it.date }
         .takeLast(7)
 
-    val rows = remember(days, rda) {
+    val rows = remember(days, rda, snapshot.nutritionDays) {
         if (days.size < 3) return@remember emptyList<Pair<String, Double>>()
         val count = NutritionConstants.NUTRIENT_COUNT
+        val vDIdx = NutritionConstants.NUTRIENT_INDEX["vD"] ?: -1
         val sum = DoubleArray(count)
         val has = BooleanArray(count)
         days.forEach { d ->
+            val dayVd = NutritionConstants.computeVitaminDBreakdown(d.date, snapshot.nutritionDays)
+            val dayHasRawVd = vDIdx >= 0 && d.items.any { (it.nutrients.getOrNull(vDIdx) ?: -1.0) >= 0.0 }
+            if (vDIdx >= 0 && (dayHasRawVd || dayVd.effectiveMcg > 0.0 || dayVd.carryInFromYesterdayMcg > 0.0)) {
+                sum[vDIdx] += dayVd.effectiveMcg
+                has[vDIdx] = true
+            }
             d.items.forEach { item ->
                 item.nutrients.forEachIndexed { idx, v ->
-                    if (idx < count && v >= 0.0) {
+                    if (idx < count && idx != vDIdx && v >= 0.0) {
                         sum[idx] += v * item.grams / 100.0
                         has[idx] = true
                     }

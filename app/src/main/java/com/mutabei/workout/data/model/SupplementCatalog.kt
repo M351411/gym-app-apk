@@ -52,6 +52,18 @@ object SupplementCatalog {
     }
 
     val ALL: List<FoodItem> = listOf(
+        // 0. Davalindi 10,000 IU (MUP Egypt — Cholecalciferol Vitamin D3) — per 1 tablet (250 mcg = 10,000 IU)
+        unitSupplement(
+            id = "supp_davalindi_10000",
+            nameAr = "دافاليندي 10,000 وحدة (Davalindi — فيتامين د3)",
+            nameEn = "Davalindi 10000 IU Vitamin D3 Cholecalciferol MUP",
+            unitLabel = "قرص",
+            values = mapOf(
+                "kcal" to 0.0,
+                "vD" to 250.0
+            )
+        ),
+
         // 1. Vita-Stress (MUP Egypt) — per 1 tablet
         unitSupplement(
             id = "supp_vita_stress",
@@ -269,15 +281,20 @@ object SupplementCatalog {
             val raw = nutrients.getOrNull(idx) ?: -1.0
             if (raw > 0.0) {
                 val amount = raw * grams / 100.0
-                val formatted = if (amount >= 10.0) {
-                    amount.roundToInt().toString()
-                } else {
-                    val r = (amount * 10.0).roundToInt() / 10.0
-                    if (r % 1.0 == 0.0) r.toInt().toString() else r.toString()
-                }
                 val label = NutritionConstants.NUTRIENT_LABELS[k] ?: k
-                val unit = NutritionConstants.NUTRIENT_UNITS[k] ?: ""
-                parts.add("$label $formatted $unit".trim())
+                if (k == "vD") {
+                    val iu = (amount * NutritionConstants.VITAMIN_D_IU_PER_MCG).roundToInt()
+                    parts.add("$label $iu IU")
+                } else {
+                    val formatted = if (amount >= 10.0) {
+                        amount.roundToInt().toString()
+                    } else {
+                        val r = (amount * 10.0).roundToInt() / 10.0
+                        if (r % 1.0 == 0.0) r.toInt().toString() else r.toString()
+                    }
+                    val unit = NutritionConstants.NUTRIENT_UNITS[k] ?: ""
+                    parts.add("$label $formatted $unit".trim())
+                }
             }
         }
         return parts.joinToString(" · ")

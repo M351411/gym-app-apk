@@ -282,6 +282,7 @@ private fun MainAppShell(user: FirebaseUser) {
                 weeklyState = coachReport,
                 savedReports = snapshot.coachReports,
                 onSendChat = viewModel::sendCoachChatMessage,
+                onRetryChat = viewModel::retryLastCoachChatMessage,
                 onClearChat = viewModel::clearCoachChat,
                 onUndoAutoLoggedFood = viewModel::undoCoachAutoLoggedFood,
                 onMoveAutoLoggedFoodMeal = viewModel::moveCoachAutoLoggedFoodMeal,

@@ -171,7 +171,8 @@ data class AiPreWorkoutUiState(
 data class AiCoachChatUiState(
     val messages: List<CoachChatMessage> = emptyList(),
     val busyMessage: String? = null,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val canRetry: Boolean = false
 )
 
 data class AiMacroTetrisUiState(
@@ -650,7 +651,16 @@ class MainViewModel(
         viewModelScope.launch {
             val entry = offlineFoodRepo.enrichLoggedItem(rawEntry, snap.customFoods)
             val res = firestoreRepo.saveNutritionDay(currentUserId, day.copy(items = day.items + entry))
-            if (res.isSuccess) showToast("اتضافت ${food.name} ✅")
+            if (res.isSuccess) {
+                val vdMcg = entry.nutrientAmount("vD")
+                if (vdMcg > NutritionConstants.VITAMIN_D_DAILY_TARGET_MCG) {
+                    val carryIu = ((vdMcg - NutritionConstants.VITAMIN_D_DAILY_TARGET_MCG)
+                        .coerceIn(0.0, NutritionConstants.VITAMIN_D_DAILY_TARGET_MCG) * NutritionConstants.VITAMIN_D_IU_PER_MCG).roundToInt()
+                    showToast("اتضافت ${food.name} ✅ — تم تغطية 5000 IU اليوم وترحيل $carryIu IU لليوم التالي")
+                } else {
+                    showToast("اتضافت ${food.name} ✅")
+                }
+            }
         }
     }
 
@@ -711,12 +721,31 @@ class MainViewModel(
             return
         }
         val cur = snap.nutritionDays[date] ?: NutritionDay(id = date, userId = currentUserId, date = date)
+        val todayVdCarry = NutritionConstants.computeVitaminDBreakdown(date, snap.nutritionDays).carryInFromYesterdayMcg
+        val skipHighDoseVd = todayVdCarry >= NutritionConstants.VITAMIN_D_DAILY_TARGET_MCG
+        val sourceItems = if (skipHighDoseVd) {
+            yDay.items.filterNot { it.nutrientAmount("vD") > NutritionConstants.VITAMIN_D_DAILY_TARGET_MCG }
+        } else {
+            yDay.items
+        }
+        val skippedVdCount = yDay.items.size - sourceItems.size
+        if (sourceItems.isEmpty()) {
+            showToast("أمس كان فيه جرعة فيتامين D فقط وهي مغطية النهارده تلقائياً ✅")
+            return
+        }
         viewModelScope.launch {
-            val copied = yDay.items.map {
+            val copied = sourceItems.map {
                 offlineFoodRepo.enrichLoggedItem(it.copy(id = UUID.randomUUID().toString()), snap.customFoods)
             }
             val res = firestoreRepo.saveNutritionDay(currentUserId, cur.copy(items = cur.items + copied))
-            if (res.isSuccess) showToast("تم نسخ وجبات أمس وتحديث الميكروز ✅")
+            if (res.isSuccess) {
+                val msg = if (skippedVdCount > 0) {
+                    "تم نسخ وجبات أمس (وتم استثناء دافاليندي لأن جرعة أمس مغطية النهارده ✅)"
+                } else {
+                    "تم نسخ وجبات أمس وتحديث الميكروز ✅"
+                }
+                showToast(msg)
+            }
         }
     }
 
@@ -1027,6 +1056,8 @@ class MainViewModel(
 
         // 3) Today's live nutrition so far (fuel, water, sodium, caffeine, supplements)
         val todayNut = snap.nutritionDays[today]
+        val todayVd = NutritionConstants.computeVitaminDBreakdown(today, snap.nutritionDays)
+        val todayVdNote = if (todayVd.carryInIu > 0) " (فيتامين D مُغطى اليوم بـ ${todayVd.effectiveIu}/5000 IU بترحيل من جرعة أمس)" else ""
         val todayNutText = if (todayNut != null && (todayNut.items.isNotEmpty() || todayNut.waterMl > 0)) {
             val tKcal = todayNut.items.sumOf { it.nutrientAmount("kcal") }.roundToInt()
             val tP = todayNut.items.sumOf { it.nutrientAmount("p") }.roundToInt()
@@ -1041,7 +1072,7 @@ class MainViewModel(
             val remF = targets?.let { (it.fatG - tF) }
             val itemNames = todayNut.items.takeLast(8).joinToString("، ") { "${it.name} (${it.grams.roundToInt()}جم)" }
             buildString {
-                append("النهارده لحد دلوقتي: $tKcal سعر، بروتين ${tP}جم، كارب ${tC}جم، دهون ${tF}جم، ماء ${todayNut.waterMl}مل، صوديوم ${tNa}مجم، بوتاسيوم ${tK}مجم، كافيين ${tCaf}مجم.")
+                append("النهارده لحد دلوقتي: $tKcal سعر، بروتين ${tP}جم، كارب ${tC}جم، دهون ${tF}جم، ماء ${todayNut.waterMl}مل، صوديوم ${tNa}مجم، بوتاسيوم ${tK}مجم، كافيين ${tCaf}مجم.$todayVdNote")
                 if (remK != null && remP != null && remC != null && remF != null) {
                     append(" المتبقي اليوم: ${remK} سعر | بروتين ${remP}جم | كارب ${remC}جم | دهون ${remF}جم.")
                 }
@@ -1051,7 +1082,7 @@ class MainViewModel(
             val remLine = targets?.let {
                 " المتبقي اليوم بالكامل: ${it.kcal} سعر | بروتين ${it.proteinG}جم | كارب ${it.carbsG}جم | دهون ${it.fatG}جم."
             }.orEmpty()
-            "النهارده لسه لم يتم تسجيل أكل أو ماء.$remLine"
+            "النهارده لسه لم يتم تسجيل أكل أو ماء.$todayVdNote$remLine"
         }
 
         // 4) 7-day nutrition averages + micronutrient deficits
@@ -1067,12 +1098,19 @@ class MainViewModel(
             val avgWater = (nutDays.sumOf { it.waterMl } / nutDays.size)
             val rda = if (snap.config.sex == "f") NutritionConstants.RDA_FEMALE else NutritionConstants.RDA_MALE
             val count = NutritionConstants.NUTRIENT_COUNT
+            val vDIdx = NutritionConstants.NUTRIENT_INDEX["vD"] ?: -1
             val sum = DoubleArray(count)
             val has = BooleanArray(count)
             nutDays.forEach { d ->
+                val dayVd = NutritionConstants.computeVitaminDBreakdown(d.date, snap.nutritionDays)
+                val dayHasRawVd = vDIdx >= 0 && d.items.any { (it.nutrients.getOrNull(vDIdx) ?: -1.0) >= 0.0 }
+                if (vDIdx >= 0 && (dayHasRawVd || dayVd.effectiveMcg > 0.0 || dayVd.carryInFromYesterdayMcg > 0.0)) {
+                    sum[vDIdx] += dayVd.effectiveMcg
+                    has[vDIdx] = true
+                }
                 d.items.forEach { item ->
                     item.nutrients.forEachIndexed { idx, v ->
-                        if (idx < count && v >= 0.0) {
+                        if (idx < count && idx != vDIdx && v >= 0.0) {
                             sum[idx] += v * item.grams / 100.0
                             has[idx] = true
                         }
@@ -1141,6 +1179,7 @@ class MainViewModel(
         }
 
         return """
+            تاريخ اليوم: $today | تاريخ أمس: ${shiftIsoDate(today, -1)}
             الهدف: ${snap.config.goal} | الأسبوع $weekNum من 12 | الجنس: ${if (snap.config.sex == "f") "أنثى" else "ذكر"} | العمر: ${snap.config.age} | الطول: ${snap.config.heightCm.roundToInt()} سم
             الأهداف اليومية الحالية: ${targets?.let { "${it.kcal} سعر | بروتين ${it.proteinG}جم | كارب ${it.carbsG}جم | دهون ${it.fatG}جم" } ?: "غير محددة"}
             حجم التمرين آخر 7 أيام (${sessions7.size} جلسات، إجمالي $totalSets7 مجموعة): $volumeText
@@ -1220,10 +1259,11 @@ class MainViewModel(
         }
     }
 
+    private var lastFailedCoachRequest: Triple<List<CoachChatMessage>, String, Bitmap?>? = null
+
     fun sendCoachChatMessage(text: String, attachedBitmap: Bitmap? = null) {
         val cleaned = text.trim()
         if (cleaned.isBlank() && attachedBitmap == null) return
-        val snap = currentSnapshot()
         val prevHistory = _coachChat.value.messages
         val userMsg = CoachChatMessage(
             id = UUID.randomUUID().toString(),
@@ -1235,22 +1275,46 @@ class MainViewModel(
             it.copy(
                 messages = it.messages + userMsg,
                 busyMessage = "المدرب الذكي بيفكر في سؤالك...",
-                errorMessage = null
+                errorMessage = null,
+                canRetry = false
             )
         }
+        executeCoachChatTurn(prevHistory = prevHistory, cleanedText = cleaned, attachedBitmap = attachedBitmap)
+    }
 
+    fun retryLastCoachChatMessage() {
+        val failed = lastFailedCoachRequest ?: return
+        if (_coachChat.value.busyMessage != null) return
+        val (prevHistory, cleaned, bitmap) = failed
+        _coachChat.update {
+            it.copy(
+                busyMessage = "جاري إعادة إرسال رسالتك للمدرب الذكي...",
+                errorMessage = null,
+                canRetry = false
+            )
+        }
+        executeCoachChatTurn(prevHistory = prevHistory, cleanedText = cleaned, attachedBitmap = bitmap)
+    }
+
+    private fun executeCoachChatTurn(
+        prevHistory: List<CoachChatMessage>,
+        cleanedText: String,
+        attachedBitmap: Bitmap?
+    ) {
+        val snap = currentSnapshot()
         val contextText = buildFullAthleteContext(snap)
         viewModelScope.launch {
             val res = geminiRepo.sendCoachChatMessage(
                 athleteContext = contextText,
                 history = prevHistory,
-                userMessage = cleaned,
+                userMessage = cleanedText,
                 attachedBitmap = attachedBitmap
             ) { stage ->
                 _coachChat.update { it.copy(busyMessage = stage) }
             }
             res.fold(
                 onSuccess = { reply ->
+                    lastFailedCoachRequest = null
                     val autoLoggedEntries = if (reply.loggedFoods.isNotEmpty()) {
                         persistCoachLoggedFoods(reply.loggedFoods)
                     } else {
@@ -1268,24 +1332,36 @@ class MainViewModel(
                         it.copy(
                             messages = it.messages + aiMsg,
                             busyMessage = null,
-                            errorMessage = null
+                            errorMessage = null,
+                            canRetry = false
                         )
                     }
                     if (autoLoggedEntries.isNotEmpty()) {
+                        val today = todayIso()
+                        val yesterday = shiftIsoDate(today, -1)
                         val totalKcal = autoLoggedEntries.sumOf { it.food.kcal }
                         val countLabel = if (autoLoggedEntries.size == 1) {
                             autoLoggedEntries.first().food.name
                         } else {
                             "${autoLoggedEntries.size} أصناف"
                         }
-                        showToast("اتضاف $countLabel ($totalKcal سعر) ليوم النهارده تلقائياً ✅")
+                        val distinctDates = autoLoggedEntries.map { it.targetDate }.distinct()
+                        val dayLabel = when {
+                            distinctDates.size == 1 && distinctDates.first() == today -> "ليوم النهارده"
+                            distinctDates.size == 1 && distinctDates.first() == yesterday -> "ليوم أمس (${yesterday})"
+                            distinctDates.size == 1 -> "ليوم ${distinctDates.first()}"
+                            else -> "لسجل التغذية"
+                        }
+                        showToast("اتضاف $countLabel ($totalKcal سعر) $dayLabel تلقائياً ✅")
                     }
                 },
                 onFailure = { e ->
+                    lastFailedCoachRequest = Triple(prevHistory, cleanedText, attachedBitmap)
                     _coachChat.update {
                         it.copy(
                             busyMessage = null,
-                            errorMessage = e.message ?: "تعذّر الحصول على رد من المدرب الذكي."
+                            errorMessage = e.message ?: "تعذّر الحصول على رد من المدرب الذكي.",
+                            canRetry = true
                         )
                     }
                 }
@@ -1319,7 +1395,7 @@ class MainViewModel(
             name = food.name.trim().ifBlank { "وجبة مسجلة بالمدرب الذكي" },
             source = "a",
             grams = grams,
-            mealIndex = mealIndex.coerceIn(0, 3),
+            mealIndex = mealIndex.coerceIn(0, 4),
             nutrients = nutArr
         )
     }
@@ -1327,31 +1403,47 @@ class MainViewModel(
     private suspend fun persistCoachLoggedFoods(foods: List<CoachSuggestedFood>): List<CoachAutoLoggedFood> {
         val today = todayIso()
         val latestSnap = currentSnapshot()
-        val day = latestSnap.nutritionDays[today] ?: NutritionDay(id = today, userId = currentUserId, date = today)
+        val groupedByDate = foods.take(12).groupBy { it.targetDate.ifBlank { today } }
+        val allSaved = mutableListOf<CoachAutoLoggedFood>()
+        var anyFailed = false
 
-        val pairs = foods.take(8).map { f ->
-            val slot = f.mealIndex.coerceIn(0, 3)
-            val item = buildLoggedItemFromCoachFood(f, slot)
-            item to CoachAutoLoggedFood(
-                loggedItemId = item.id,
-                food = f.copy(mealIndex = slot),
-                mealIndex = slot
-            )
+        for ((targetDate, dateFoods) in groupedByDate) {
+            val day = latestSnap.nutritionDays[targetDate]
+                ?: NutritionDay(id = targetDate, userId = currentUserId, date = targetDate)
+            val pairs = dateFoods.map { f ->
+                val slot = f.mealIndex.coerceIn(0, 4)
+                val item = buildLoggedItemFromCoachFood(f, slot)
+                item to CoachAutoLoggedFood(
+                    loggedItemId = item.id,
+                    food = f.copy(mealIndex = slot, targetDate = targetDate),
+                    mealIndex = slot,
+                    targetDate = targetDate
+                )
+            }
+            val newItems = pairs.map { it.first }
+            val res = firestoreRepo.saveNutritionDay(currentUserId, day.copy(items = day.items + newItems))
+            if (res.isSuccess) {
+                allSaved.addAll(pairs.map { it.second })
+            } else {
+                anyFailed = true
+            }
         }
-        val newItems = pairs.map { it.first }
-        val res = firestoreRepo.saveNutritionDay(currentUserId, day.copy(items = day.items + newItems))
-        return if (res.isSuccess) {
-            pairs.map { it.second }
-        } else {
-            showToast("تعذّر حفظ الوجبة في سجل النهارده — جرّب تاني.")
-            emptyList()
+        if (anyFailed && allSaved.isEmpty()) {
+            showToast("تعذّر حفظ الوجبة في سجل التغذية — جرّب تاني.")
         }
+        return allSaved
     }
 
     fun undoCoachAutoLoggedFood(messageId: String, loggedItemId: String) {
-        val today = todayIso()
+        val targetDate = _coachChat.value.messages
+            .firstOrNull { it.id == messageId }
+            ?.autoLoggedFoods
+            ?.firstOrNull { it.loggedItemId == loggedItemId }
+            ?.targetDate
+            ?.ifBlank { todayIso() }
+            ?: todayIso()
         val snap = currentSnapshot()
-        val day = snap.nutritionDays[today] ?: return
+        val day = snap.nutritionDays[targetDate] ?: return
         val remaining = day.items.filterNot { it.id == loggedItemId }
         viewModelScope.launch {
             val res = firestoreRepo.saveNutritionDay(currentUserId, day.copy(items = remaining))
@@ -1365,7 +1457,8 @@ class MainViewModel(
                         }
                     )
                 }
-                showToast("تم التراجع وحذف الصنف من يوم النهارده")
+                val dayLabel = if (targetDate == todayIso()) "يوم النهارده" else "يوم $targetDate"
+                showToast("تم التراجع وحذف الصنف من $dayLabel")
             } else {
                 showToast("تعذّر حذف الصنف")
             }
@@ -1373,10 +1466,16 @@ class MainViewModel(
     }
 
     fun moveCoachAutoLoggedFoodMeal(messageId: String, loggedItemId: String, newMealIndex: Int) {
-        val safeMeal = newMealIndex.coerceIn(0, 3)
-        val today = todayIso()
+        val safeMeal = newMealIndex.coerceIn(0, 4)
+        val targetDate = _coachChat.value.messages
+            .firstOrNull { it.id == messageId }
+            ?.autoLoggedFoods
+            ?.firstOrNull { it.loggedItemId == loggedItemId }
+            ?.targetDate
+            ?.ifBlank { todayIso() }
+            ?: todayIso()
         val snap = currentSnapshot()
-        val day = snap.nutritionDays[today] ?: return
+        val day = snap.nutritionDays[targetDate] ?: return
         val updatedItems = day.items.map { item ->
             if (item.id == loggedItemId) item.copy(mealIndex = safeMeal) else item
         }
@@ -1405,6 +1504,7 @@ class MainViewModel(
     }
 
     fun clearCoachChat() {
+        lastFailedCoachRequest = null
         _coachChat.value = AiCoachChatUiState()
     }
 

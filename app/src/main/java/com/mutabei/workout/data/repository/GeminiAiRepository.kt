@@ -33,10 +33,12 @@ import com.mutabei.workout.data.model.CoachSuggestedTargets
 import com.mutabei.workout.data.model.NutritionConstants
 import com.mutabei.workout.data.model.PreWorkoutGamePlan
 import com.mutabei.workout.data.model.PreWorkoutTargetExercise
+import com.mutabei.workout.data.model.shiftIsoDate
 import com.mutabei.workout.data.model.todayIso
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -388,11 +390,13 @@ class GeminiAiRepository {
                 "fat_g" to Schema.integer(description = "Realistic fat in grams"),
                 "fiber_g" to Schema.integer(description = "Approximate fiber in grams"),
                 "sodium_mg" to Schema.integer(description = "Approximate sodium in mg"),
-                "meal_index" to Schema.integer(description = "Meal slot: 0=فطار (Breakfast), 1=غدا (Lunch), 2=عشا (Dinner), 3=سناك (Snack)")
+                "meal_index" to Schema.integer(description = "Meal slot: 0=فطار (Breakfast), 1=غدا (Lunch), 2=عشا (Dinner), 3=سناك (Snack), 4=مكملات وفيتامينات (Supplements)"),
+                "day_offset" to Schema.integer(description = "Day offset relative to today: 0=today (النهارده), -1=yesterday (امبارح/أمس), -2=two days ago (أول امبارح). Range -14..0"),
+                "target_date" to Schema.string(description = "Optional explicit YYYY-MM-DD date if logging to a specific calendar date", nullable = true)
             ),
-            optionalProperties = listOf("fiber_g", "sodium_mg")
+            optionalProperties = listOf("fiber_g", "sodium_mg", "day_offset", "target_date")
         ),
-        description = "Populate ONLY when the user reports food/meals/cheat meals they ALREADY ATE or asks you to calculate and add/log a meal into today's nutrition log (text description or meal photo). Include EVERY distinct item consumed (up to 8 items). Leave null when not logging consumed food.",
+        description = "Populate ONLY when the user reports specific food/meals/cheat meals they ALREADY ATE (today, yesterday, or an earlier day) or asks you to calculate and add/log them into their nutrition log (text description or meal photo). Include EVERY distinct item consumed (up to 12 items). Leave null when the user has not yet listed what they ate.",
         nullable = true
     )
 
@@ -456,10 +460,12 @@ class GeminiAiRepository {
         1. كل ردودك باللهجة المصرية المحترمة، عملية، مباشرة، ومبنية على الأرقام الحقيقية الموجودة في ملف اللاعب.
         2. لما اللاعب يسأل عن بديل تمرين بسبب إصابة/ألم أو زحمة الجيم: اديله بديلين علميين بنفس المسار العضلي وحدد الوزن المبدئي المناسب.
         3. لما يبعت صورة (منيو مطعم، محتويات تلاجة، أو علبة مكمل): حلّل الصورة بدقة بناءً على باقي سعراته وماكروزه ومكملاته النهارده، واديله اختيار محدد بالجرامات.
-        4. **تسجيل الوجبات واللخبطة تلقائياً (أولوية قصوى):** لما اللاعب يقولك إنه أكل وجبة أو لخبط أو مش عارف سعرات أكلة أو مش عارف يدخلها إزاي، أو بعت صورة أكلة أكلها وطلب تضيفها أو تحسبها له عشان يشوف متبقيله إيه:
-           - حط كل صنف أكله بالتفصيل في `logged_foods` بأوزان جرامات واقعية وسعرات وماكروز صريحة غير متفائلة (خصوصًا في أكل المطاعم والمخبوزات والحلويات والمقليات المصرية مثل الكشري، الشاورما، المحشي، المكرونة بالبشاميل، الكنافة، البيبسي... إلخ)، وحدد `meal_index` المناسب (0=فطار، 1=غدا، 2=عشا، 3=سناك) حسب كلامه أو نوع الوجبة.
-           - التطبيق هيسجّل `logged_foods` تلقائياً في يوم النهارده فورًا مع ردك.
-           - في `reply_ar`: اكتب ملخص واضح لسعرات وماكروز اللي اتسجّل، ثم احسبله بالظبط **المتبقي له النهارده بعد الإضافة** (السعرات، البروتين، الكارب، الدهون) بناءً على أرقام ملفه الحالية. لو عدا السعرات، طمّنه بدون تأنيب واديله خطة عملية لباقي اليوم (مثلاً يركّز على بروتين صافي بأقل سعرات + مشي خفيف أو يوزن باقي اليوم).
+        4. **تسجيل الوجبات واللخبطة تلقائياً (النهارده أو امبارح أو أي يوم سابق — أولوية قصوى):**
+           - لما اللاعب يقولك إنه أكل وجبة أو لخبط أو نسي يسجل وجبات **امبارح (أمس)** أو يوم سابق:
+             * لو لسه مقالش أكل إيه بالظبط (زي: "نسيت أسجل وجبات امبارح وعايزك تضيفهالي"): رحّب بيه واسأله ببساطة يكتبلك أكل إيه امبارح (فطار، غدا، عشا، سناك، أو مكملات) بأي وصف عشوائي وإنت هتقدّر السعرات والماكروز وتضيفهم مباشرة ليوم أمس تلقائياً. في الحالة دي خلي `logged_foods` = null.
+             * أول ما يذكر الأصناف اللي أكلها (سواء النهارده أو امبارح أو أول امبارح): حط كل صنف أكله بالتفصيل في `logged_foods` بأوزان جرامات واقعية وسعرات وماكروز صريحة غير متفائلة، وحدد `meal_index` المناسب (0=فطار، 1=غدا، 2=عشا، 3=سناك، 4=مكملات وفيتامينات)، وحدد `day_offset` بدقة: `0` للنهارده، `-1` لامبارح/أمس، `-2` لأول امبارح (أو `target_date` بصيغة YYYY-MM-DD).
+           - التطبيق هيسجّل `logged_foods` تلقائياً في اليوم المحدد فورًا مع ردك.
+           - في `reply_ar`: اكتب ملخص واضح لسعرات وماكروز اللي اتسجّل ولأي يوم اتضاف (النهارده ولا أمس)، ثم احسبله بالظبط **المتبقي أو الفارق** مقارنة بأهدافه اليومية. لو عدا السعرات، طمّنه بدون تأنيب واديله خطة عملية هادية.
            - ما تكررش الأكلات اللي حطيتها في `logged_foods` جوه `suggested_foods`.
         5. حط `suggested_targets` بس لو اللاعب طلب تعديل أهداف السعرات/الماكروز أو لقيت فعلاً سبب رقمي واضح للتعديل. وإلا خليها null.
         6. حط `suggested_foods` (1-3 أكلات مصرية بالجرامات والماكروز) فقط لما تقترح وجبة أو سناك **مستقبلي لسه مأكلوش** يقدر يضيفه بضغطة واحدة.
@@ -1107,15 +1113,28 @@ class GeminiAiRepository {
         defaultMealIndex: Int = 3
     ): List<CoachSuggestedFood> {
         if (arr == null) return emptyList()
+        val today = todayIso()
+        val isoRegex = Regex("^\\d{4}-\\d{2}-\\d{2}$")
         val out = mutableListOf<CoachSuggestedFood>()
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
             val name = o.optString("name", "").trim()
             if (name.isBlank()) continue
             val mealIdx = if (o.has("meal_index") && !o.isNull("meal_index")) {
-                o.optInt("meal_index", defaultMealIndex).coerceIn(0, 3)
+                o.optInt("meal_index", defaultMealIndex).coerceIn(0, 4)
             } else {
                 defaultMealIndex
+            }
+            val rawTargetDate = if (o.has("target_date") && !o.isNull("target_date")) {
+                o.optString("target_date", "").trim()
+            } else ""
+            val resolvedDate = when {
+                isoRegex.matches(rawTargetDate) -> rawTargetDate
+                o.has("day_offset") && !o.isNull("day_offset") -> {
+                    val offset = o.optInt("day_offset", 0).coerceIn(-14, 0)
+                    if (offset == 0) "" else shiftIsoDate(today, offset.toLong())
+                }
+                else -> ""
             }
             out.add(
                 CoachSuggestedFood(
@@ -1127,7 +1146,8 @@ class GeminiAiRepository {
                     fatG = o.optInt("fat_g", 0).coerceAtLeast(0),
                     fiberG = o.optInt("fiber_g", 0).coerceAtLeast(0),
                     sodiumMg = o.optInt("sodium_mg", 0).coerceAtLeast(0),
-                    mealIndex = mealIdx
+                    mealIndex = mealIdx,
+                    targetDate = resolvedDate
                 )
             )
         }
@@ -1241,6 +1261,15 @@ class GeminiAiRepository {
         lowerErr.contains("429") ||
             lowerErr.contains("quota") ||
             lowerErr.contains("resource_exhausted")
+
+    private fun isTransientHighDemand(lowerErr: String): Boolean =
+        lowerErr.contains("high demand") ||
+            lowerErr.contains("503") ||
+            lowerErr.contains("overloaded") ||
+            lowerErr.contains("unavailable") ||
+            lowerErr.contains("try again later") ||
+            lowerErr.contains("temporarily") ||
+            lowerErr.contains("service unavailable")
 
     private fun recordQuotaCooldown(modelName: String, lowerErr: String) {
         val cooldownMs = if (
@@ -1365,36 +1394,81 @@ class GeminiAiRepository {
         // when the first model hits 429/QuotaExceededException, remember its cooldown and
         // immediately fall back to the backup model instead of failing the user's request!
         val firstWasQuota = isQuotaErrorChain(firstErrLower)
+        val firstWasHighDemand = isTransientHighDemand(firstErrLower)
         if (firstWasQuota) {
             recordQuotaCooldown(firstName, firstErrLower)
             onProgress("$stepPrefix النموذج الأساسي وصل للحد المجاني، جاري التحويل تلقائيًا لـ $secondName...")
+        } else if (firstWasHighDemand) {
+            onProgress("$stepPrefix ضغط لحظي على $firstName، جاري التحويل تلقائيًا لـ $secondName...")
         } else {
             onProgress("$stepPrefix جاري المحاولة بالنموذج البديل ($secondName)...")
         }
 
-        val secondAttempt = generateJsonAttempt(
+        var latestFirst = firstAttempt
+        var latestSecond = generateJsonAttempt(
             model = secondModel,
             modelName = secondName,
             requestContents = requestContents,
             timeoutMs = timeoutFor(secondName, hasImage)
         )
-        if (secondAttempt.text != null) {
-            return secondAttempt.text
+        if (latestSecond.text != null) {
+            return latestSecond.text!!
         }
 
-        val secondErrLower = secondAttempt.errorChain.lowercase()
-        if (isQuotaErrorChain(secondErrLower)) {
+        val secondErrLower = latestSecond.errorChain.lowercase()
+        val secondWasQuota = isQuotaErrorChain(secondErrLower)
+        val secondWasHighDemand = isTransientHighDemand(secondErrLower)
+        if (secondWasQuota) {
             recordQuotaCooldown(secondName, secondErrLower)
+        }
+
+        // Transient Google 503 "high demand" spikes usually clear within a few seconds:
+        // automatically retry with short backoff instead of failing immediately after 5-6s.
+        if (firstWasHighDemand || secondWasHighDemand) {
+            val backoffDelaysMs = longArrayOf(2_500L, 5_000L)
+            for ((retryIdx, waitMs) in backoffDelaysMs.withIndex()) {
+                val roundNum = retryIdx + 1
+                onProgress("$stepPrefix سيرفرات Gemini عليها ضغط لحظي، إعادة المحاولة تلقائياً ($roundNum/${backoffDelaysMs.size})...")
+                delay(waitMs)
+
+                if (!firstWasQuota) {
+                    val retryFirst = generateJsonAttempt(
+                        model = firstModel,
+                        modelName = firstName,
+                        requestContents = requestContents,
+                        timeoutMs = firstTimeoutMs
+                    )
+                    if (retryFirst.text != null) return retryFirst.text
+                    latestFirst = retryFirst
+                    if (isQuotaErrorChain(retryFirst.errorChain.lowercase())) {
+                        recordQuotaCooldown(firstName, retryFirst.errorChain.lowercase())
+                    }
+                }
+
+                if (!secondWasQuota) {
+                    val retrySecond = generateJsonAttempt(
+                        model = secondModel,
+                        modelName = secondName,
+                        requestContents = requestContents,
+                        timeoutMs = timeoutFor(secondName, hasImage)
+                    )
+                    if (retrySecond.text != null) return retrySecond.text
+                    latestSecond = retrySecond
+                    if (isQuotaErrorChain(retrySecond.errorChain.lowercase())) {
+                        recordQuotaCooldown(secondName, retrySecond.errorChain.lowercase())
+                    }
+                }
+            }
         }
 
         throw GeminiStreamStageException(
             primaryModel = firstName,
-            primarySummary = firstAttempt.summary,
+            primarySummary = latestFirst.summary,
             fallbackModel = secondName,
-            fallbackSummary = secondAttempt.summary,
+            fallbackSummary = latestSecond.summary,
             imageKb = imageKb,
-            anyTimedOut = firstAttempt.timedOut || secondAttempt.timedOut,
-            cause = secondAttempt.error ?: firstAttempt.error
+            anyTimedOut = latestFirst.timedOut || latestSecond.timedOut,
+            cause = latestSecond.error ?: latestFirst.error
         )
     }
 
@@ -1640,6 +1714,9 @@ class GeminiAiRepository {
                 lower.contains("429") || lower.contains("quota") || lower.contains("resource_exhausted") ->
                     "تم تجاوز حد الطلبات المؤقت لـ Gemini. انتظر دقيقة ثم جرّب مرة تانية."
 
+                lower.contains("high demand") || lower.contains("503") || lower.contains("overloaded") || lower.contains("unavailable") || lower.contains("try again later") ->
+                    "سيرفرات Gemini عليها ضغط لحظي دلوقتي (High Demand). حاولنا تلقائياً أكتر من مرة — استنى ثواني واضغط «إعادة المحاولة»."
+
                 error.anyTimedOut ->
                     "انتهى وقت انتظار رد Gemini (بعد تجربة النموذج الأساسي والبديل). تأكد من الإنترنت وجرّب مرة تانية."
 
@@ -1667,6 +1744,9 @@ class GeminiAiRepository {
 
             lower.contains("429") || lower.contains("quota") || lower.contains("resource_exhausted") ->
                 "تم تجاوز حد الطلبات المؤقت لـ Gemini. انتظر دقيقة ثم جرّب مرة تانية."
+
+            lower.contains("high demand") || lower.contains("503") || lower.contains("overloaded") || lower.contains("unavailable") || lower.contains("try again later") ->
+                "سيرفرات Gemini عليها ضغط لحظي دلوقتي (High Demand). استنى ثواني وجرّب تاني."
 
             lower.contains("unknownhost") || lower.contains("connect") || lower.contains("network") || lower.contains("socket") ->
                 "مشكلة في اتصال الإنترنت أثناء الإرسال إلى Gemini."

@@ -81,6 +81,8 @@ import com.mutabei.workout.data.model.CoachSuggestedTargets
 import com.mutabei.workout.data.model.NutritionConstants
 import com.mutabei.workout.data.model.PreWorkoutGamePlan
 import com.mutabei.workout.data.model.SplitDay
+import com.mutabei.workout.data.model.shiftIsoDate
+import com.mutabei.workout.data.model.todayIso
 import com.mutabei.workout.ui.theme.LocalSemanticColors
 import com.mutabei.workout.ui.viewmodel.AiCoachUiState
 import com.mutabei.workout.ui.viewmodel.AiPreWorkoutUiState
@@ -98,6 +100,15 @@ fun CoachAutoLoggedSection(
     val totalP = entries.sumOf { it.food.proteinG }
     val totalC = entries.sumOf { it.food.carbsG }
     val totalF = entries.sumOf { it.food.fatG }
+    val today = todayIso()
+    val yesterday = shiftIsoDate(today, -1)
+    val distinctDates = entries.map { it.targetDate.ifBlank { today } }.distinct()
+    val headerText = when {
+        distinctDates.size == 1 && distinctDates.first() == today -> "اتضافت ليوم النهارده تلقائياً"
+        distinctDates.size == 1 && distinctDates.first() == yesterday -> "اتضافت ليوم أمس ($yesterday) تلقائياً"
+        distinctDates.size == 1 -> "اتضافت ليوم ${distinctDates.first()} تلقائياً"
+        else -> "اتضافت لسجل التغذية تلقائياً"
+    }
 
     Surface(
         color = semantic.ok.copy(alpha = 0.11f),
@@ -127,7 +138,7 @@ fun CoachAutoLoggedSection(
                         modifier = Modifier.size(18.dp)
                     )
                     Text(
-                        text = "اتضافت ليوم النهارده تلقائياً",
+                        text = headerText,
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.ExtraBold,
                         color = semantic.ok
@@ -157,7 +168,8 @@ fun CoachAutoLoggedSection(
 
             entries.forEach { entry ->
                 val food = entry.food
-                val mealLabel = NutritionConstants.MEAL_NAMES.getOrElse(entry.mealIndex.coerceIn(0, 3)) { "سناك" }
+                val safeSlot = entry.mealIndex.coerceIn(0, 4)
+                val mealLabel = if (safeSlot == 4) "مكملات" else NutritionConstants.MEAL_NAMES.getOrElse(safeSlot) { "سناك" }
                 Surface(
                     color = MaterialTheme.colorScheme.surface,
                     shape = RoundedCornerShape(10.dp),
@@ -193,7 +205,7 @@ fun CoachAutoLoggedSection(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(99.dp))
                                     .clickable {
-                                        val nextSlot = (entry.mealIndex + 1) % 4
+                                        val nextSlot = (safeSlot + 1) % 5
                                         onMoveMealSlot(entry.loggedItemId, nextSlot)
                                     }
                                     .testTag("coach_logged_meal_slot_${entry.loggedItemId}")

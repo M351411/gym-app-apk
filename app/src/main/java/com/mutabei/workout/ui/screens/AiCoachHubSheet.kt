@@ -36,7 +36,9 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
@@ -117,6 +119,7 @@ fun AiCoachHubSheet(
     weeklyState: AiCoachUiState,
     savedReports: List<CoachReportRecord>,
     onSendChat: (String, Bitmap?) -> Unit,
+    onRetryChat: () -> Unit,
     onClearChat: () -> Unit,
     onUndoAutoLoggedFood: (String, String) -> Unit,
     onMoveAutoLoggedFoodMeal: (String, String, Int) -> Unit,
@@ -259,6 +262,7 @@ fun AiCoachHubSheet(
                             todayMacros = todayMacros,
                             chatState = chatState,
                             onSend = onSendChat,
+                            onRetry = onRetryChat,
                             onUndoAutoLoggedFood = onUndoAutoLoggedFood,
                             onMoveAutoLoggedFoodMeal = onMoveAutoLoggedFoodMeal,
                             onApplyTargets = onApplyTargets,
@@ -362,6 +366,7 @@ private fun CoachChatTab(
     todayMacros: CoachTodayMacroStatus?,
     chatState: AiCoachChatUiState,
     onSend: (String, Bitmap?) -> Unit,
+    onRetry: () -> Unit,
     onUndoAutoLoggedFood: (String, String) -> Unit,
     onMoveAutoLoggedFoodMeal: (String, String, Int) -> Unit,
     onApplyTargets: (CoachSuggestedTargets) -> Unit,
@@ -452,6 +457,27 @@ private fun CoachChatTab(
                         },
                         modifier = Modifier.testTag("coach_quick_log_meal_chip")
                     )
+                    AssistChip(
+                        onClick = {
+                            inputText = "نسيت أسجل وجبات امبارح، أكلت: "
+                        },
+                        label = {
+                            Text(
+                                "سجّل وجبات امبارح اللي نسيتها",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Rounded.AutoAwesome,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        modifier = Modifier.testTag("coach_quick_log_yesterday_chip")
+                    )
                     QUICK_CHAT_PROMPTS.forEachIndexed { idx, (label, prompt) ->
                         AssistChip(
                             onClick = { onSend(prompt, null) },
@@ -508,14 +534,33 @@ private fun CoachChatTab(
                     item(key = "chat_error_card") {
                         Surface(
                             color = MaterialTheme.colorScheme.errorContainer,
-                            shape = RoundedCornerShape(14.dp)
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                text = chatState.errorMessage,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.padding(12.dp)
-                            )
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    text = chatState.errorMessage,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                                if (chatState.canRetry && chatState.busyMessage == null) {
+                                    Button(
+                                        onClick = onRetry,
+                                        modifier = Modifier.testTag("coach_retry_last_btn")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Refresh,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("إعادة المحاولة")
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -545,6 +590,10 @@ private fun CoachChatTab(
                         AssistChip(
                             onClick = { inputText = "أكلت النهارده: " },
                             label = { Text("سجّل وجبة / لخبطة", style = MaterialTheme.typography.labelSmall) }
+                        )
+                        AssistChip(
+                            onClick = { inputText = "نسيت أسجل وجبات امبارح، أكلت: " },
+                            label = { Text("سجّل وجبات امبارح", style = MaterialTheme.typography.labelSmall) }
                         )
                         QUICK_CHAT_PROMPTS.take(3).forEach { (label, prompt) ->
                             AssistChip(

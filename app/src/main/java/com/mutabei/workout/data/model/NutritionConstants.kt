@@ -1,12 +1,29 @@
 package com.mutabei.workout.data.model
 
+import kotlin.math.roundToInt
+
 data class CookingRetentionMethod(
     val code: String,
     val labelAr: String,
     val factorsPercent: List<Int>? // 12 factors aligned with RETENTION_KEYS
 )
 
+data class VitaminDDayBreakdown(
+    val rawMcg: Double,
+    val carryInFromYesterdayMcg: Double,
+    val carryOutToTomorrowMcg: Double,
+    val effectiveMcg: Double,
+    val yesterdaySourceName: String? = null
+) {
+    val rawIu: Int get() = (rawMcg * NutritionConstants.VITAMIN_D_IU_PER_MCG).roundToInt()
+    val carryInIu: Int get() = (carryInFromYesterdayMcg * NutritionConstants.VITAMIN_D_IU_PER_MCG).roundToInt()
+    val carryOutIu: Int get() = (carryOutToTomorrowMcg * NutritionConstants.VITAMIN_D_IU_PER_MCG).roundToInt()
+    val effectiveIu: Int get() = (effectiveMcg * NutritionConstants.VITAMIN_D_IU_PER_MCG).roundToInt()
+}
+
 object NutritionConstants {
+    const val VITAMIN_D_DAILY_TARGET_MCG: Double = 125.0 // 5,000 IU daily target (1 mcg = 40 IU)
+    const val VITAMIN_D_IU_PER_MCG: Double = 40.0
     val NUTRIENT_KEYS: List<String> = listOf(
         "kcal", "p", "f", "c", "fib", "sug", "sat", "mono", "poly", "chol",
         "na", "k", "ca", "fe", "mg", "ph", "zn", "cu", "mn", "se",
@@ -75,7 +92,7 @@ object NutritionConstants {
     val RDA_MALE: LinkedHashMap<String, Double> = linkedMapOf(
         "leu" to 3.0, "fib" to 30.0, "asug" to 36.0, "sat" to 22.0,
         "o3" to 1.6, "epa" to 0.5, "chol" to 300.0,
-        "vA" to 900.0, "vC" to 90.0, "vD" to 15.0, "vE" to 15.0, "vK" to 120.0,
+        "vA" to 900.0, "vC" to 90.0, "vD" to VITAMIN_D_DAILY_TARGET_MCG, "vE" to 15.0, "vK" to 120.0,
         "b1" to 1.2, "b2" to 1.3, "b3" to 16.0, "b5" to 5.0, "b6" to 1.3,
         "fol" to 400.0, "b12" to 2.4,
         "na" to 2300.0, "k" to 3400.0, "ca" to 1000.0, "fe" to 8.0,
@@ -239,7 +256,11 @@ object NutritionConstants {
         "زنك" to "zinc|زنك",
         "كرياتين" to "creatine|كرياتين",
         "واي" to "whey|واي بروتين",
-        "مكمل" to "supplement|multivitamin|omega|zinc|creatine|whey"
+        "دافاليندي" to "davalindi|دافاليندي|فيتامين d",
+        "دافاليندا" to "davalindi|دافاليندي|فيتامين d",
+        "كوليكالسيفيرول" to "cholecalciferol|davalindi|دافاليندي|vitamin d",
+        "دال" to "vitamin d|فيتامين d|دافاليندي|davalindi",
+        "مكمل" to "supplement|multivitamin|omega|zinc|creatine|whey|davalindi"
     )
 
     val RETENTION_KEYS: List<String> = listOf(
@@ -276,6 +297,46 @@ object NutritionConstants {
         .replace(Regex("[أإآ]"), "ا")
         .replace("ى", "ي")
         .replace("ة", "ه")
+        .replace("ڤ", "ف")
+
+    /**
+     * Vitamin D-only every-other-day carryover exception:
+     * When a user takes a 10,000 IU dose (e.g. Davalindi = 250 mcg) on Day D,
+     * Day D retains its 5,000 IU (125 mcg) daily target and automatically carries over
+     * the surplus (up to 5,000 IU / 125 mcg) to Day D+1.
+     */
+    fun computeVitaminDBreakdown(
+        date: String,
+        nutritionDays: Map<String, NutritionDay>
+    ): VitaminDDayBreakdown {
+        val todayDay = nutritionDays[date]
+        val yesterdayDate = shiftIsoDate(date, -1)
+        val yesterdayDay = nutritionDays[yesterdayDate]
+
+        val rawToday = todayDay?.items?.sumOf { it.nutrientAmount("vD") } ?: 0.0
+        val rawYesterday = yesterdayDay?.items?.sumOf { it.nutrientAmount("vD") } ?: 0.0
+
+        val carryIn = (rawYesterday - VITAMIN_D_DAILY_TARGET_MCG)
+            .coerceIn(0.0, VITAMIN_D_DAILY_TARGET_MCG)
+        val carryOut = (rawToday - VITAMIN_D_DAILY_TARGET_MCG)
+            .coerceIn(0.0, VITAMIN_D_DAILY_TARGET_MCG)
+        val effective = (rawToday - carryOut + carryIn).coerceAtLeast(0.0)
+
+        val yesterdaySource = if (carryIn > 0.0) {
+            yesterdayDay?.items
+                ?.filter { it.nutrientAmount("vD") > 0.0 }
+                ?.maxByOrNull { it.nutrientAmount("vD") }
+                ?.name
+        } else null
+
+        return VitaminDDayBreakdown(
+            rawMcg = rawToday,
+            carryInFromYesterdayMcg = carryIn,
+            carryOutToTomorrowMcg = carryOut,
+            effectiveMcg = effective,
+            yesterdaySourceName = yesterdaySource
+        )
+    }
 
     fun emptyNutrientVector(): List<Double> = List(NUTRIENT_COUNT) { -1.0 }
 

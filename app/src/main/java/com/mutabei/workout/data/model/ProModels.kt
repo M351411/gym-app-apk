@@ -48,13 +48,15 @@ data class CoachSuggestedFood(
     val fatG: Int = 0,
     val fiberG: Int = 0,
     val sodiumMg: Int = 0,
-    val mealIndex: Int = 3
+    val mealIndex: Int = 3,
+    val targetDate: String = ""
 )
 
 data class CoachAutoLoggedFood(
     val loggedItemId: String,
     val food: CoachSuggestedFood,
-    val mealIndex: Int
+    val mealIndex: Int,
+    val targetDate: String = todayIso()
 )
 
 data class AiWeeklyCoachReport(

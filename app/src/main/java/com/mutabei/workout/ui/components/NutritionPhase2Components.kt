@@ -181,7 +181,7 @@ fun SupplementSynergyCard(
         val fe = totalOf("fe")
         val zn = totalOf("zn")
         val mg = totalOf("mg")
-        val vD = totalOf("vD")
+        val rawVd = dayItems.sumOf { it.nutrientAmount("vD") }
         val vC = totalOf("vC")
         val o3 = totalOf("o3") + totalOf("epa")
         val caf = totalOf("caf")
@@ -197,7 +197,7 @@ fun SupplementSynergyCard(
                 )
             )
         }
-        if (suppItems.any { it.nutrientAmount("vD") >= 5.0 || it.nutrientAmount("o3") >= 0.3 || it.nutrientAmount("epa") >= 0.2 } || vD >= 15.0 || o3 >= 1.0) {
+        if (suppItems.any { it.nutrientAmount("vD") >= 5.0 || it.nutrientAmount("o3") >= 0.3 || it.nutrientAmount("epa") >= 0.2 } || rawVd >= 15.0 || o3 >= 1.0) {
             out.add(
                 Triple(
                     false,

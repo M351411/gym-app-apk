@@ -623,6 +623,9 @@ private fun SupplementCatalogRow(item: FoodItem, onClick: () -> Unit) {
     val defaultGrams = item.portions.firstOrNull()?.grams ?: 100.0
     val microSummary = SupplementCatalog.activeNutrientsSummary(item.nutrients, defaultGrams, maxItems = 4)
     val defaultPortionLabel = item.portions.firstOrNull()?.name ?: "100 جم"
+    val vdIdx = NutritionConstants.NUTRIENT_INDEX["vD"] ?: -1
+    val defaultVdMcg = if (vdIdx >= 0) ((item.nutrients.getOrNull(vdIdx) ?: -1.0).coerceAtLeast(0.0) * defaultGrams / 100.0) else 0.0
+    val isEveryOtherDayVd = defaultVdMcg > NutritionConstants.VITAMIN_D_DAILY_TARGET_MCG
 
     Row(
         modifier = Modifier
@@ -640,9 +643,11 @@ private fun SupplementCatalogRow(item: FoodItem, onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.primary
             )
             Text(
-                text = "الحصة الافتراضية: $defaultPortionLabel" + if (!isUnit) " · ${item.kcalPer100()} سعر/100جم" else "",
+                text = "الحصة الافتراضية: $defaultPortionLabel" +
+                    (if (!isUnit) " · ${item.kcalPer100()} سعر/100جم" else "") +
+                    (if (isEveryOtherDayVd) " · يوم أه ويوم لا (يملأ اليوم وغداً)" else ""),
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = if (isEveryOtherDayVd) LocalSemanticColors.current.ok else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -769,6 +774,10 @@ private fun FoodSelectionDetailView(
         }
         if (isUnitSupp) {
             val activeMicros = SupplementCatalog.activeNutrientsSummary(food.nutrients, effectiveGrams, maxItems = 12)
+            val vdIdx = NutritionConstants.NUTRIENT_INDEX["vD"] ?: -1
+            val vdMcg = if (vdIdx >= 0) ((food.nutrients.getOrNull(vdIdx) ?: -1.0).coerceAtLeast(0.0) * effectiveGrams / 100.0) else 0.0
+            val carryTomorrowIu = ((vdMcg - NutritionConstants.VITAMIN_D_DAILY_TARGET_MCG)
+                .coerceIn(0.0, NutritionConstants.VITAMIN_D_DAILY_TARGET_MCG) * NutritionConstants.VITAMIN_D_IU_PER_MCG).roundToInt()
             Surface(
                 shape = MaterialTheme.shapes.small,
                 color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
@@ -786,6 +795,14 @@ private fun FoodSelectionDetailView(
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.primary
                     )
+                    if (carryTomorrowIu > 0) {
+                        Text(
+                            text = "استثناء فيتامين D (يوم أه ويوم لا): هيملى 5000 IU لليوم ده + $carryTomorrowIu IU لليوم اللي بعده تلقائياً.",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = LocalSemanticColors.current.ok
+                        )
+                    }
                 }
             }
         } else {
