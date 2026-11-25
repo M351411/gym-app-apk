@@ -189,6 +189,7 @@ private fun MainAppShell(user: FirebaseUser) {
             initializer {
                 val app = checkNotNull(this[APPLICATION_KEY])
                 MainViewModel(
+                    appContext = app,
                     firestoreRepo = FirestoreRepository(app),
                     offlineFoodRepo = OfflineFoodRepository(app),
                     geminiRepo = GeminiAiRepository(),
@@ -256,76 +257,41 @@ private fun MainAppShell(user: FirebaseUser) {
             )
         }
 
-        if (showCoachDialog && snapshot != null) {
-            val todayNut = snapshot.nutritionDays[todayIso()]
-            val targets = viewModel.computeTargets(snapshot.config, snapshot.bodyRecords)
-            val todayMacros = targets?.let { t ->
-                val items = todayNut?.items.orEmpty()
-                CoachTodayMacroStatus(
-                    targetKcal = t.kcal,
-                    targetProteinG = t.proteinG,
-                    targetCarbsG = t.carbsG,
-                    targetFatG = t.fatG,
-                    consumedKcal = items.sumOf { it.nutrientAmount("kcal") }.roundToInt(),
-                    consumedProteinG = items.sumOf { it.nutrientAmount("p") }.roundToInt(),
-                    consumedCarbsG = items.sumOf { it.nutrientAmount("c") }.roundToInt(),
-                    consumedFatG = items.sumOf { it.nutrientAmount("f") }.roundToInt()
-                )
-            }
-            AiCoachHubSheet(
-                weekNumber = viewModel.computeWeekNumber(snapshot.config.startDate),
-                splitDays = snapshot.config.effectiveSplit(),
-                selectedDayIndex = selectedDayIndex,
-                todayMacros = todayMacros,
-                chatState = coachChat,
-                preWorkoutState = preWorkoutPlan,
-                weeklyState = coachReport,
-                savedReports = snapshot.coachReports,
-                onSendChat = viewModel::sendCoachChatMessage,
-                onRetryChat = viewModel::retryLastCoachChatMessage,
-                onClearChat = viewModel::clearCoachChat,
-                onUndoAutoLoggedFood = viewModel::undoCoachAutoLoggedFood,
-                onMoveAutoLoggedFoodMeal = viewModel::moveCoachAutoLoggedFoodMeal,
-                onGeneratePreWorkout = viewModel::requestPreWorkoutGamePlan,
-                onGenerateWeeklyReport = viewModel::requestWeeklyCoachReport,
-                onDeleteReport = viewModel::deleteCoachReport,
-                onApplyTargets = viewModel::applyCoachSuggestedTargets,
-                onAddFood = { food -> viewModel.addCoachSuggestedFoodToToday(food) },
-                onShowMessage = viewModel::showToast,
-                onDismiss = { showCoachDialog = false }
-            )
-        }
+        Box(modifier = Modifier.fillMaxSize()) {
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val useRail = maxWidth >= 600.dp
 
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val useRail = maxWidth >= 600.dp
-
-            Row(modifier = Modifier.fillMaxSize()) {
-                if (useRail) {
-                    NavigationRail(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        modifier = Modifier.fillMaxHeight()
-                    ) {
-                        NAV_DESTINATIONS.forEach { dest ->
-                            NavigationRailItem(
-                                selected = selectedTab == dest.tab,
-                                onClick = { viewModel.selectTab(dest.tab) },
-                                icon = {
-                                    Icon(
-                                        imageVector = dest.icon,
-                                        contentDescription = stringResource(dest.labelRes)
-                                    )
-                                },
-                                label = { Text(stringResource(dest.labelRes)) },
-                                modifier = Modifier.testTag(dest.tag)
-                            )
+                Row(modifier = Modifier.fillMaxSize()) {
+                    if (useRail) {
+                        NavigationRail(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            modifier = Modifier.fillMaxHeight()
+                        ) {
+                            NAV_DESTINATIONS.forEach { dest ->
+                                NavigationRailItem(
+                                    selected = selectedTab == dest.tab,
+                                    onClick = { viewModel.selectTab(dest.tab) },
+                                    icon = {
+                                        Icon(
+                                            imageVector = dest.icon,
+                                            contentDescription = stringResource(dest.labelRes)
+                                        )
+                                    },
+                                    label = { Text(stringResource(dest.labelRes)) },
+                                    modifier = Modifier.testTag(dest.tag)
+                                )
+                            }
                         }
                     }
-                }
 
-                Scaffold(
-                    modifier = Modifier.weight(1f),
-                    containerColor = MaterialTheme.colorScheme.background,
-                    snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+                    Scaffold(
+                        modifier = Modifier.weight(1f),
+                        containerColor = MaterialTheme.colorScheme.background,
+                        snackbarHost = {
+                            if (!showCoachDialog) {
+                                SnackbarHost(hostState = snackbarHostState)
+                            }
+                        },
                     topBar = {
                         TopAppBar(
                             colors = TopAppBarDefaults.topAppBarColors(
@@ -543,6 +509,52 @@ private fun MainAppShell(user: FirebaseUser) {
                         }
                     }
                 }
+            }
+            }
+
+            if (showCoachDialog && snapshot != null) {
+                val todayNut = snapshot.nutritionDays[todayIso()]
+                val targets = viewModel.computeTargets(snapshot.config, snapshot.bodyRecords)
+                val todayMacros = targets?.let { t ->
+                    val items = todayNut?.items.orEmpty()
+                    CoachTodayMacroStatus(
+                        targetKcal = t.kcal,
+                        targetProteinG = t.proteinG,
+                        targetCarbsG = t.carbsG,
+                        targetFatG = t.fatG,
+                        consumedKcal = items.sumOf { it.nutrientAmount("kcal") }.roundToInt(),
+                        consumedProteinG = items.sumOf { it.nutrientAmount("p") }.roundToInt(),
+                        consumedCarbsG = items.sumOf { it.nutrientAmount("c") }.roundToInt(),
+                        consumedFatG = items.sumOf { it.nutrientAmount("f") }.roundToInt()
+                    )
+                }
+                AiCoachHubSheet(
+                    weekNumber = viewModel.computeWeekNumber(snapshot.config.startDate),
+                    splitDays = snapshot.config.effectiveSplit(),
+                    selectedDayIndex = selectedDayIndex,
+                    todayMacros = todayMacros,
+                    chatState = coachChat,
+                    preWorkoutState = preWorkoutPlan,
+                    weeklyState = coachReport,
+                    savedReports = snapshot.coachReports,
+                    snackbarHostState = snackbarHostState,
+                    onSendChat = viewModel::sendCoachChatMessage,
+                    onRetryChat = viewModel::retryLastCoachChatMessage,
+                    onClearChat = viewModel::clearCoachChat,
+                    onUndoAutoLoggedFood = viewModel::undoCoachAutoLoggedFood,
+                    onMoveAutoLoggedFoodMeal = viewModel::moveCoachAutoLoggedFoodMeal,
+                    onGeneratePreWorkout = viewModel::requestPreWorkoutGamePlan,
+                    onGenerateWeeklyReport = viewModel::requestWeeklyCoachReport,
+                    onDeleteReport = viewModel::deleteCoachReport,
+                    onApplyTargets = viewModel::applyCoachSuggestedTargets,
+                    onAddFood = { food -> viewModel.addCoachSuggestedFoodToToday(food) },
+                    onOpenOfflineNutrition = { forYesterday ->
+                        showCoachDialog = false
+                        viewModel.openOfflineMealLogger(forYesterday)
+                    },
+                    onShowMessage = viewModel::showToast,
+                    onDismiss = { showCoachDialog = false }
+                )
             }
         }
     }

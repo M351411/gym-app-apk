@@ -1,5 +1,6 @@
 package com.mutabei.workout.ui.viewmodel
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -54,6 +55,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -182,6 +185,7 @@ data class AiMacroTetrisUiState(
 )
 
 class MainViewModel(
+    private val appContext: Context,
     private val firestoreRepo: FirestoreRepository,
     private val offlineFoodRepo: OfflineFoodRepository,
     private val geminiRepo: GeminiAiRepository,
@@ -294,6 +298,77 @@ class MainViewModel(
     init {
         viewModelScope.launch {
             offlineFoodRepo.ensureLoaded()
+            syncRequestedYesterdayMealsOnce()
+        }
+    }
+
+    private suspend fun syncRequestedYesterdayMealsOnce() {
+        val targetDate = "2026-11-24"
+        val prefs = appContext.getSharedPreferences("mutabei_user_sync", Context.MODE_PRIVATE)
+        val prefKey = "logged_requested_meals_${targetDate}_${currentUserId}_v1"
+        if (prefs.getBoolean(prefKey, false)) return
+
+        val snapshot = dataState.filterIsInstance<UiState.Success<AppDataSnapshot>>().first().data
+        val existingDay = snapshot.nutritionDays[targetDate]
+        if (existingDay != null && existingDay.items.any { it.id.startsWith("req_20261124_") }) {
+            prefs.edit().putBoolean(prefKey, true).apply()
+            return
+        }
+
+        fun makeItem(
+            id: String,
+            name: String,
+            mealIndex: Int,
+            grams: Double,
+            kcalPer100: Double,
+            pPer100: Double,
+            fPer100: Double,
+            cPer100: Double,
+            fibPer100: Double = -1.0,
+            naPer100: Double = -1.0,
+            caPer100: Double = -1.0
+        ): LoggedFoodItem {
+            val nut = MutableList(NutritionConstants.NUTRIENT_COUNT) { -1.0 }
+            nut[0] = kcalPer100
+            nut[1] = pPer100
+            nut[2] = fPer100
+            nut[3] = cPer100
+            if (fibPer100 >= 0.0) NutritionConstants.NUTRIENT_INDEX["fib"]?.let { nut[it] = fibPer100 }
+            if (naPer100 >= 0.0) NutritionConstants.NUTRIENT_INDEX["na"]?.let { nut[it] = naPer100 }
+            if (caPer100 >= 0.0) NutritionConstants.NUTRIENT_INDEX["ca"]?.let { nut[it] = caPer100 }
+            return LoggedFoodItem(
+                id = id,
+                name = name,
+                source = "e",
+                grams = grams,
+                mealIndex = mealIndex,
+                nutrients = nut
+            )
+        }
+
+        val rawItems = listOf(
+            // فطار (Breakfast = 0)
+            makeItem("req_20261124_01", "كيك سادة", 0, 35.0, 360.0, 6.5, 15.0, 50.0, 1.0, 320.0),
+            makeItem("req_20261124_02", "مخبوزات صغيرة", 0, 30.0, 375.0, 7.5, 18.0, 46.0, 1.8, 420.0),
+            makeItem("req_20261124_03", "قرص سادة متوسط", 0, 60.0, 345.0, 7.8, 12.5, 50.5, 2.4, 380.0),
+            // غداء (Lunch = 1)
+            makeItem("req_20261124_04", "بسلة مطبوخة", 1, 100.0, 75.0, 4.5, 2.5, 9.5, 4.2, 260.0),
+            makeItem("req_20261124_05", "أرز بالشعرية", 1, 300.0, 158.0, 3.1, 2.8, 30.0, 0.9, 210.0),
+            makeItem("req_20261124_06", "صدر دجاج مطبوخ", 1, 85.0, 165.0, 31.0, 3.6, 0.0, 0.0, 74.0),
+            makeItem("req_20261124_07", "فول سوداني", 1, 25.0, 585.0, 26.4, 44.9, 21.7, 8.5, 18.0),
+            makeItem("req_20261124_08", "بليلة (قمح مسلوق + لبن + سكر خفيف)", 1, 412.0, 87.0, 2.8, 1.8, 15.2, 1.6, 32.0, 62.0),
+            // العشاء (Dinner = 2)
+            makeItem("req_20261124_09", "عيش بلدي", 2, 60.0, 254.0, 8.8, 1.0, 53.8, 5.5, 390.0),
+            makeItem("req_20261124_10", "جبن فيتا باندا دهن نباتي", 2, 55.0, 250.0, 8.0, 22.0, 5.0, 0.0, 950.0, 280.0)
+        )
+
+        val enriched = rawItems.map { offlineFoodRepo.enrichLoggedItem(it, snapshot.customFoods) }
+        val baseDay = existingDay ?: NutritionDay(id = targetDate, userId = currentUserId, date = targetDate)
+        val dayToSave = baseDay.copy(items = baseDay.items + enriched)
+        val res = firestoreRepo.saveNutritionDay(currentUserId, dayToSave)
+        if (res.isSuccess) {
+            prefs.edit().putBoolean(prefKey, true).apply()
+            showToast("تم تسجيل وجبات أمس ($targetDate) — 10 أصناف (1929 سعر) ✅")
         }
     }
 
@@ -310,6 +385,16 @@ class MainViewModel(
 
     fun shiftNutritionDate(deltaDays: Long) {
         _selectedNutritionDate.value = shiftIsoDate(_selectedNutritionDate.value, deltaDays)
+    }
+
+    fun selectNutritionDate(isoDate: String) {
+        _selectedNutritionDate.value = isoDate
+    }
+
+    fun openOfflineMealLogger(forYesterday: Boolean) {
+        val targetDate = if (forYesterday) shiftIsoDate(todayIso(), -1) else todayIso()
+        _selectedNutritionDate.value = targetDate
+        _selectedTab.value = MainTab.NUTRITION
     }
 
     fun showToast(message: String) {

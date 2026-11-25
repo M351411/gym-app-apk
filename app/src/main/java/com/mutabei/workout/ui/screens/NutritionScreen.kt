@@ -156,6 +156,12 @@ fun NutritionScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
+                        val yesterday = shiftIsoDate(today, -1)
+                        val dateTitle = when (selectedDate) {
+                            today -> "النهارده"
+                            yesterday -> "أمس · $selectedDate"
+                            else -> selectedDate
+                        }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
@@ -168,7 +174,7 @@ fun NutritionScreen(
                                 Icon(Icons.Rounded.ChevronRight, contentDescription = stringResource(R.string.cd_prev_day))
                             }
                             Text(
-                                text = if (selectedDate == today) "النهارده" else selectedDate,
+                                text = dateTitle,
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.ExtraBold
                             )
@@ -178,6 +184,25 @@ fun NutritionScreen(
                             ) {
                                 Icon(Icons.Rounded.ChevronLeft, contentDescription = stringResource(R.string.cd_next_day))
                             }
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+                        ) {
+                            FilterChip(
+                                selected = selectedDate == today,
+                                onClick = { viewModel.selectNutritionDate(today) },
+                                label = { Text("النهارده") },
+                                modifier = Modifier.testTag("nutrition_jump_today")
+                            )
+                            FilterChip(
+                                selected = selectedDate == yesterday,
+                                onClick = { viewModel.selectNutritionDate(yesterday) },
+                                label = { Text("أمس") },
+                                modifier = Modifier.testTag("nutrition_jump_yesterday")
+                            )
                         }
 
                         val kcal = totalOf("kcal")

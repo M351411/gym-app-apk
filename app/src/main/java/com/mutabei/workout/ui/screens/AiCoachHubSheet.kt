@@ -2,6 +2,7 @@ package com.mutabei.workout.ui.screens
 
 import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -16,19 +17,22 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.AutoAwesome
@@ -37,6 +41,7 @@ import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Restaurant
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -46,12 +51,17 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -68,11 +78,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.mutabei.workout.data.model.CoachChatMessage
 import com.mutabei.workout.data.model.CoachReportRecord
 import com.mutabei.workout.data.model.CoachSuggestedFood
@@ -118,6 +127,7 @@ fun AiCoachHubSheet(
     preWorkoutState: AiPreWorkoutUiState,
     weeklyState: AiCoachUiState,
     savedReports: List<CoachReportRecord>,
+    snackbarHostState: SnackbarHostState,
     onSendChat: (String, Bitmap?) -> Unit,
     onRetryChat: () -> Unit,
     onClearChat: () -> Unit,
@@ -128,149 +138,157 @@ fun AiCoachHubSheet(
     onDeleteReport: (String) -> Unit,
     onApplyTargets: (CoachSuggestedTargets) -> Unit,
     onAddFood: (CoachSuggestedFood) -> Unit,
+    onOpenOfflineNutrition: (Boolean) -> Unit,
     onShowMessage: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
     var activeTab by remember { mutableIntStateOf(0) }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false
-        )
-    ) {
-        BackHandler(onBack = onDismiss)
+    BackHandler(onBack = onDismiss)
 
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.background
-        ) {
-            Scaffold(
-                containerColor = MaterialTheme.colorScheme.background,
-                contentWindowInsets = WindowInsets.safeDrawing,
-                topBar = {
-                    Column {
-                        TopAppBar(
-                            colors = TopAppBarDefaults.topAppBarColors(
-                                containerColor = MaterialTheme.colorScheme.background
-                            ),
-                            title = {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(38.dp)
-                                            .clip(CircleShape)
-                                            .background(
-                                                Brush.linearGradient(
-                                                    listOf(
-                                                        MaterialTheme.colorScheme.primary,
-                                                        MaterialTheme.colorScheme.secondary
-                                                    )
+    // Render directly inside the Activity window (instead of a separate Dialog window)
+    // so Android's adjustResize + WindowInsets.ime work reliably on all OEMs (ColorOS/Xiaomi/Samsung/Pixel).
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {
+        Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            snackbarHost = {
+                SnackbarHost(
+                    hostState = snackbarHostState,
+                    modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
+                )
+            },
+            topBar = {
+                Column {
+                    TopAppBar(
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = MaterialTheme.colorScheme.background
+                        ),
+                        title = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            Brush.linearGradient(
+                                                listOf(
+                                                    MaterialTheme.colorScheme.primary,
+                                                    MaterialTheme.colorScheme.secondary
                                                 )
-                                            ),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.AutoAwesome,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                    Column {
-                                        Text(
-                                            text = "المدرب الذكي",
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Text(
-                                            text = "الأسبوع $weekNumber · متصل ببياناتك الحقيقية",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            },
-                            actions = {
-                                if (activeTab == 0 && chatState.messages.isNotEmpty()) {
-                                    IconButton(
-                                        onClick = onClearChat,
-                                        modifier = Modifier.testTag("coach_clear_chat_btn")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.DeleteSweep,
-                                            contentDescription = "مسح المحادثة",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                IconButton(
-                                    onClick = onDismiss,
-                                    modifier = Modifier.testTag("coach_hub_close_btn")
+                                            )
+                                        ),
+                                    contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Rounded.Close,
-                                        contentDescription = "إغلاق المدرب الذكي"
+                                        imageVector = Icons.Rounded.AutoAwesome,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                Column {
+                                    Text(
+                                        text = "المدرب الذكي",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "الأسبوع $weekNumber · متصل ببياناتك الحقيقية",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
-                        )
-
-                        PrimaryTabRow(
-                            selectedTabIndex = activeTab,
-                            containerColor = MaterialTheme.colorScheme.background
-                        ) {
-                            Tab(
-                                selected = activeTab == 0,
-                                onClick = { activeTab = 0 },
-                                text = { Text("الشات الذكي", fontWeight = if (activeTab == 0) FontWeight.Bold else FontWeight.Normal) },
-                                modifier = Modifier.testTag("coach_tab_chat")
-                            )
-                            Tab(
-                                selected = activeTab == 1,
-                                onClick = { activeTab = 1 },
-                                text = { Text("التحليل والخطة", fontWeight = if (activeTab == 1) FontWeight.Bold else FontWeight.Normal) },
-                                modifier = Modifier.testTag("coach_tab_plan")
-                            )
-                            Tab(
-                                selected = activeTab == 2,
-                                onClick = { activeTab = 2 },
-                                text = {
-                                    val countSuffix = if (savedReports.isNotEmpty()) " (${savedReports.size})" else ""
-                                    Text(
-                                        "الأرشيف$countSuffix",
-                                        fontWeight = if (activeTab == 2) FontWeight.Bold else FontWeight.Normal
+                        },
+                        actions = {
+                            if (activeTab == 0 && chatState.messages.isNotEmpty()) {
+                                IconButton(
+                                    onClick = onClearChat,
+                                    modifier = Modifier.testTag("coach_clear_chat_btn")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.DeleteSweep,
+                                        contentDescription = "مسح المحادثة",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                },
-                                modifier = Modifier.testTag("coach_tab_archive")
-                            )
+                                }
+                            }
+                            IconButton(
+                                onClick = onDismiss,
+                                modifier = Modifier.testTag("coach_hub_close_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Close,
+                                    contentDescription = "إغلاق المدرب الذكي"
+                                )
+                            }
                         }
+                    )
+
+                    PrimaryTabRow(
+                        selectedTabIndex = activeTab,
+                        containerColor = MaterialTheme.colorScheme.background
+                    ) {
+                        Tab(
+                            selected = activeTab == 0,
+                            onClick = { activeTab = 0 },
+                            text = { Text("الشات الذكي", fontWeight = if (activeTab == 0) FontWeight.Bold else FontWeight.Normal) },
+                            modifier = Modifier.testTag("coach_tab_chat")
+                        )
+                        Tab(
+                            selected = activeTab == 1,
+                            onClick = { activeTab = 1 },
+                            text = { Text("التحليل والخطة", fontWeight = if (activeTab == 1) FontWeight.Bold else FontWeight.Normal) },
+                            modifier = Modifier.testTag("coach_tab_plan")
+                        )
+                        Tab(
+                            selected = activeTab == 2,
+                            onClick = { activeTab = 2 },
+                            text = {
+                                val countSuffix = if (savedReports.isNotEmpty()) " (${savedReports.size})" else ""
+                                Text(
+                                    "الأرشيف$countSuffix",
+                                    fontWeight = if (activeTab == 2) FontWeight.Bold else FontWeight.Normal
+                                )
+                            },
+                            modifier = Modifier.testTag("coach_tab_archive")
+                        )
                     }
                 }
-            ) { innerPadding ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding)
-                ) {
-                    when (activeTab) {
-                        0 -> CoachChatTab(
-                            todayMacros = todayMacros,
-                            chatState = chatState,
-                            onSend = onSendChat,
-                            onRetry = onRetryChat,
-                            onUndoAutoLoggedFood = onUndoAutoLoggedFood,
-                            onMoveAutoLoggedFoodMeal = onMoveAutoLoggedFoodMeal,
-                            onApplyTargets = onApplyTargets,
-                            onAddFood = onAddFood,
-                            onPhotoError = onShowMessage
-                        )
+            }
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                when (activeTab) {
+                    0 -> CoachChatTab(
+                        todayMacros = todayMacros,
+                        chatState = chatState,
+                        onSend = onSendChat,
+                        onRetry = onRetryChat,
+                        onUndoAutoLoggedFood = onUndoAutoLoggedFood,
+                        onMoveAutoLoggedFoodMeal = onMoveAutoLoggedFoodMeal,
+                        onApplyTargets = onApplyTargets,
+                        onAddFood = onAddFood,
+                        onOpenOfflineNutrition = onOpenOfflineNutrition,
+                        onPhotoError = onShowMessage
+                    )
 
-                        1 -> CoachAnalysisAndPlanTab(
+                    1 -> Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .navigationBarsPadding()
+                    ) {
+                        CoachAnalysisAndPlanTab(
                             splitDays = splitDays,
                             initialDayIndex = selectedDayIndex,
                             preWorkoutState = preWorkoutState,
@@ -280,8 +298,14 @@ fun AiCoachHubSheet(
                             onApplyTargets = onApplyTargets,
                             onAddFood = onAddFood
                         )
+                    }
 
-                        2 -> CoachArchiveTab(
+                    2 -> Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .navigationBarsPadding()
+                    ) {
+                        CoachArchiveTab(
                             reports = savedReports,
                             onDeleteReport = onDeleteReport,
                             onApplyTargets = onApplyTargets,
@@ -371,28 +395,31 @@ private fun CoachChatTab(
     onMoveAutoLoggedFoodMeal: (String, String, Int) -> Unit,
     onApplyTargets: (CoachSuggestedTargets) -> Unit,
     onAddFood: (CoachSuggestedFood) -> Unit,
+    onOpenOfflineNutrition: (Boolean) -> Unit,
     onPhotoError: (String) -> Unit
 ) {
     var inputText by remember { mutableStateOf("") }
     var pendingBitmap by remember { mutableStateOf<Bitmap?>(null) }
     val listState = rememberLazyListState()
+    val density = LocalDensity.current
+    val isImeVisible = WindowInsets.ime.getBottom(density) > 0
 
     val imageCapture = rememberImageCaptureController(
         onBitmapCaptured = { bmp -> pendingBitmap = bmp },
         onError = onPhotoError
     )
 
-    LaunchedEffect(chatState.messages.size, chatState.busyMessage != null) {
-        val total = chatState.messages.size + if (chatState.busyMessage != null) 1 else 0
+    LaunchedEffect(chatState.messages.size, chatState.busyMessage != null, isImeVisible) {
+        val total = chatState.messages.size +
+            (if (chatState.busyMessage != null) 1 else 0) +
+            (if (!chatState.errorMessage.isNullOrBlank()) 1 else 0)
         if (total > 0) {
             listState.animateScrollToItem(total - 1)
         }
     }
 
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .imePadding()
+        modifier = Modifier.fillMaxSize()
     ) {
         if (todayMacros != null) {
             LiveRemainingMacrosStrip(status = todayMacros)
@@ -403,6 +430,7 @@ private fun CoachChatTab(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -421,7 +449,7 @@ private fun CoachChatTab(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "لو لخبطت أو مش عارف سعرات وجبة (كشري، شاورما، أكل بيت، عزومة) — اوصفها لي أو صوّرها وهحسبها وأضيفها ليوم النهارده تلقائياً وأقولك متبقيلك كام بالظبط!",
+                            text = "لو لخبطت أو مش عارف سعرات وجبة (كشري، شاورما، أكل بيت، عزومة) — اوصفها لي أو صوّرها وهحسبها وأضيفها ليوم النهارده أو امبارح تلقائياً وأقولك متبقيلك كام بالظبط!",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -532,32 +560,101 @@ private fun CoachChatTab(
 
                 if (!chatState.errorMessage.isNullOrBlank()) {
                     item(key = "chat_error_card") {
+                        var showTechDetails by remember(chatState.errorMessage) { mutableStateOf(false) }
+                        val diagIdx = listOf("\n[Stage=", "\n[init=")
+                            .map { chatState.errorMessage.indexOf(it) }
+                            .filter { it >= 0 }
+                            .minOrNull() ?: -1
+                        val friendlyText = if (diagIdx >= 0) {
+                            chatState.errorMessage.substring(0, diagIdx).trim()
+                        } else {
+                            chatState.errorMessage.trim()
+                        }
+                        val techDetails = if (diagIdx >= 0) {
+                            chatState.errorMessage.substring(diagIdx + 1).trim()
+                        } else {
+                            ""
+                        }
+                        val lastUserText = chatState.messages.lastOrNull { it.fromUser }?.text.orEmpty()
+                        val mentionsYesterday = listOf("امبارح", "أمس", "امس", "البارح", "yesterday")
+                            .any { lastUserText.contains(it, ignoreCase = true) }
+
                         Surface(
                             color = MaterialTheme.colorScheme.errorContainer,
-                            shape = RoundedCornerShape(14.dp),
+                            shape = RoundedCornerShape(16.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(
-                                modifier = Modifier.padding(12.dp),
+                                modifier = Modifier.padding(14.dp),
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 Text(
-                                    text = chatState.errorMessage,
-                                    style = MaterialTheme.typography.bodySmall,
+                                    text = friendlyText,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
                                     color = MaterialTheme.colorScheme.onErrorContainer
                                 )
-                                if (chatState.canRetry && chatState.busyMessage == null) {
+
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
                                     Button(
-                                        onClick = onRetry,
-                                        modifier = Modifier.testTag("coach_retry_last_btn")
+                                        onClick = { onOpenOfflineNutrition(mentionsYesterday) },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("coach_offline_meal_fallback_btn")
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Rounded.Refresh,
+                                            imageVector = Icons.Rounded.Restaurant,
                                             contentDescription = null,
                                             modifier = Modifier.size(18.dp)
                                         )
-                                        Spacer(Modifier.width(6.dp))
-                                        Text("إعادة المحاولة")
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            if (mentionsYesterday) {
+                                                "سجّل وجبات أمس الآن (أوفلاين بدون نت)"
+                                            } else {
+                                                "سجّل وجباتك الآن (أوفلاين بدون نت)"
+                                            }
+                                        )
+                                    }
+
+                                    if (chatState.canRetry && chatState.busyMessage == null) {
+                                        OutlinedButton(
+                                            onClick = onRetry,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .testTag("coach_retry_last_btn")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Refresh,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("إعادة المحاولة مع المدرب الذكي")
+                                        }
+                                    }
+                                }
+
+                                if (techDetails.isNotBlank()) {
+                                    TextButton(
+                                        onClick = { showTechDetails = !showTechDetails },
+                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                    ) {
+                                        Text(
+                                            text = if (showTechDetails) "إخفاء التفاصيل التقنية" else "عرض التفاصيل التقنية",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f)
+                                        )
+                                    }
+                                    if (showTechDetails) {
+                                        Text(
+                                            text = techDetails,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f)
+                                        )
                                     }
                                 }
                             }
@@ -567,7 +664,8 @@ private fun CoachChatTab(
             }
         }
 
-        // Bottom multimodal input dock
+        // Bottom multimodal input dock — single union(navigationBars, ime) inset padding
+        // keeps the input box flush directly above the keyboard with zero double-padding or clipping.
         Surface(
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 4.dp
@@ -575,11 +673,11 @@ private fun CoachChatTab(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .navigationBarsPadding()
+                    .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
             ) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-                if (chatState.messages.isNotEmpty()) {
+                AnimatedVisibility(visible = chatState.messages.isNotEmpty() && !isImeVisible) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -620,7 +718,7 @@ private fun CoachChatTab(
                                 contentDescription = "صورة مرفقة",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier
-                                    .size(56.dp)
+                                    .size(52.dp)
                                     .clip(RoundedCornerShape(12.dp))
                             )
                             Surface(
@@ -644,7 +742,7 @@ private fun CoachChatTab(
                             }
                         }
                         Text(
-                            text = "صورة جاهزة للإرسال للمدرب (منيو / تلاجة / مكمل)",
+                            text = "صورة جاهزة للإرسال للمدرب",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f)
@@ -652,67 +750,88 @@ private fun CoachChatTab(
                     }
                 }
 
-                Row(
+                // Full-width clear text input field + compact action bar underneath
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    IconButton(
-                        onClick = imageCapture.launchCamera,
-                        enabled = chatState.busyMessage == null,
-                        modifier = Modifier.testTag("coach_chat_camera_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.PhotoCamera,
-                            contentDescription = "تصوير منيو أو تلاجة أو مكمل",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    IconButton(
-                        onClick = imageCapture.launchGallery,
-                        enabled = chatState.busyMessage == null,
-                        modifier = Modifier.testTag("coach_chat_gallery_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.PhotoLibrary,
-                            contentDescription = "اختيار صورة من المعرض",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
                     OutlinedTextField(
                         value = inputText,
                         onValueChange = { inputText = it },
                         placeholder = {
                             Text(
-                                text = "اوصف وجبة أكلتها لإضافتها أو اسأل مدربك...",
-                                style = MaterialTheme.typography.bodySmall
+                                text = "اكتب وجبتك أو سؤالك للمدرب...",
+                                style = MaterialTheme.typography.bodyMedium
                             )
                         },
-                        maxLines = 3,
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        minLines = 1,
+                        maxLines = 4,
                         shape = RoundedCornerShape(18.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                        ),
                         modifier = Modifier
-                            .weight(1f)
+                            .fillMaxWidth()
                             .testTag("coach_chat_input")
                     )
-                    FilledIconButton(
-                        onClick = {
-                            val textToSend = inputText
-                            val bmpToSend = pendingBitmap
-                            inputText = ""
-                            pendingBitmap = null
-                            onSend(textToSend, bmpToSend)
-                        },
-                        enabled = chatState.busyMessage == null && (inputText.isNotBlank() || pendingBitmap != null),
-                        modifier = Modifier
-                            .size(48.dp)
-                            .testTag("coach_chat_send_btn")
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.Send,
-                            contentDescription = "إرسال"
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            IconButton(
+                                onClick = imageCapture.launchCamera,
+                                enabled = chatState.busyMessage == null,
+                                modifier = Modifier.testTag("coach_chat_camera_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.PhotoCamera,
+                                    contentDescription = "تصوير منيو أو تلاجة أو مكمل",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            IconButton(
+                                onClick = imageCapture.launchGallery,
+                                enabled = chatState.busyMessage == null,
+                                modifier = Modifier.testTag("coach_chat_gallery_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.PhotoLibrary,
+                                    contentDescription = "اختيار صورة من المعرض",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+
+                        FilledIconButton(
+                            onClick = {
+                                val textToSend = inputText
+                                val bmpToSend = pendingBitmap
+                                inputText = ""
+                                pendingBitmap = null
+                                onSend(textToSend, bmpToSend)
+                            },
+                            enabled = chatState.busyMessage == null && (inputText.isNotBlank() || pendingBitmap != null),
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("coach_chat_send_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.Send,
+                                contentDescription = "إرسال"
+                            )
+                        }
                     }
                 }
             }

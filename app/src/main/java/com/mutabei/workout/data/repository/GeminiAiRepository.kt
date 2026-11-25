@@ -1271,15 +1271,35 @@ class GeminiAiRepository {
             lowerErr.contains("temporarily") ||
             lowerErr.contains("service unavailable")
 
-    private fun recordQuotaCooldown(modelName: String, lowerErr: String) {
-        val cooldownMs = if (
-            lowerErr.contains("per day") ||
-            lowerErr.contains("free_tier_requests") ||
-            lowerErr.contains("perday")
+    private fun isDailyQuotaError(lowerErr: String): Boolean {
+        if (lowerErr.contains("per minute") ||
+            lowerErr.contains("perminute") ||
+            lowerErr.contains("requests_per_minute") ||
+            lowerErr.contains("rpm")
         ) {
+            return false
+        }
+        // Free Tier 5/10/15 request limits are per-minute (RPM) burst buckets, not daily exhaustion.
+        if (Regex("limit:\\s*(5|10|15)\\b").containsMatchIn(lowerErr)) {
+            return false
+        }
+        return lowerErr.contains("per day") ||
+            lowerErr.contains("perday") ||
+            lowerErr.contains("requests_per_day") ||
+            lowerErr.contains("rpd")
+    }
+
+    private fun extractRetrySeconds(errorText: String): Int? {
+        val m = Regex("retry in\\s+(\\d+(?:\\.\\d+)?)s", RegexOption.IGNORE_CASE).find(errorText)
+        return m?.groupValues?.getOrNull(1)?.toDoubleOrNull()?.let { kotlin.math.ceil(it).toInt().coerceIn(5, 120) }
+    }
+
+    private fun recordQuotaCooldown(modelName: String, lowerErr: String) {
+        val cooldownMs = if (isDailyQuotaError(lowerErr)) {
             DAILY_QUOTA_COOLDOWN_MS
         } else {
-            RPM_QUOTA_COOLDOWN_MS
+            val retrySec = extractRetrySeconds(lowerErr)
+            if (retrySec != null) (retrySec * 1000L).coerceAtLeast(RPM_QUOTA_COOLDOWN_MS) else RPM_QUOTA_COOLDOWN_MS
         }
         quotaCooldownUntilMs[modelName] = System.currentTimeMillis() + cooldownMs
         Log.w(TAG, "Marked $modelName on quota cooldown for ${cooldownMs / 1000}s")
@@ -1422,41 +1442,40 @@ class GeminiAiRepository {
             recordQuotaCooldown(secondName, secondErrLower)
         }
 
-        // Transient Google 503 "high demand" spikes usually clear within a few seconds:
-        // automatically retry with short backoff instead of failing immediately after 5-6s.
-        if (firstWasHighDemand || secondWasHighDemand) {
-            val backoffDelaysMs = longArrayOf(2_500L, 5_000L)
-            for ((retryIdx, waitMs) in backoffDelaysMs.withIndex()) {
-                val roundNum = retryIdx + 1
-                onProgress("$stepPrefix سيرفرات Gemini عليها ضغط لحظي، إعادة المحاولة تلقائياً ($roundNum/${backoffDelaysMs.size})...")
-                delay(waitMs)
+        // Transient Google 503 "high demand" spikes can clear after a short pause.
+        // Only retry the specific model that returned 503 (never a model that hit quota),
+        // and limit to 1 calm backoff retry so we don't burn the Free Tier RPM bucket.
+        val retryFirstEligible = firstWasHighDemand && !firstWasQuota
+        val retrySecondEligible = secondWasHighDemand && !secondWasQuota
+        if (retryFirstEligible || retrySecondEligible) {
+            onProgress("$stepPrefix ضغط لحظي على سيرفرات Gemini، جاري إعادة المحاولة تلقائياً...")
+            delay(3_500L)
 
-                if (!firstWasQuota) {
-                    val retryFirst = generateJsonAttempt(
-                        model = firstModel,
-                        modelName = firstName,
-                        requestContents = requestContents,
-                        timeoutMs = firstTimeoutMs
-                    )
-                    if (retryFirst.text != null) return retryFirst.text
-                    latestFirst = retryFirst
-                    if (isQuotaErrorChain(retryFirst.errorChain.lowercase())) {
-                        recordQuotaCooldown(firstName, retryFirst.errorChain.lowercase())
-                    }
+            if (retryFirstEligible) {
+                val retryFirst = generateJsonAttempt(
+                    model = firstModel,
+                    modelName = firstName,
+                    requestContents = requestContents,
+                    timeoutMs = firstTimeoutMs
+                )
+                if (retryFirst.text != null) return retryFirst.text
+                latestFirst = retryFirst
+                if (isQuotaErrorChain(retryFirst.errorChain.lowercase())) {
+                    recordQuotaCooldown(firstName, retryFirst.errorChain.lowercase())
                 }
+            }
 
-                if (!secondWasQuota) {
-                    val retrySecond = generateJsonAttempt(
-                        model = secondModel,
-                        modelName = secondName,
-                        requestContents = requestContents,
-                        timeoutMs = timeoutFor(secondName, hasImage)
-                    )
-                    if (retrySecond.text != null) return retrySecond.text
-                    latestSecond = retrySecond
-                    if (isQuotaErrorChain(retrySecond.errorChain.lowercase())) {
-                        recordQuotaCooldown(secondName, retrySecond.errorChain.lowercase())
-                    }
+            if (retrySecondEligible) {
+                val retrySecond = generateJsonAttempt(
+                    model = secondModel,
+                    modelName = secondName,
+                    requestContents = requestContents,
+                    timeoutMs = timeoutFor(secondName, hasImage)
+                )
+                if (retrySecond.text != null) return retrySecond.text
+                latestSecond = retrySecond
+                if (isQuotaErrorChain(retrySecond.errorChain.lowercase())) {
+                    recordQuotaCooldown(secondName, retrySecond.errorChain.lowercase())
                 }
             }
         }
@@ -1708,23 +1727,25 @@ class GeminiAiRepository {
                     "رفض الخادم التحقق الأمني (App Check / reCAPTCHA) عند الاتصال بـ Gemini."
 
                 (lower.contains("429") || lower.contains("quota") || lower.contains("resource_exhausted")) &&
-                    (lower.contains("per day") || lower.contains("free_tier_requests") || lower.contains("perday")) ->
-                    "تم استهلاك الحد اليومي المجاني (Free Tier) لنماذج Gemini على المشروع. الحد بيتصفّر تلقائيًا بعد الوقت الموضح بالأسفل، أو تقدر ترفعه بتفعيل خطة Blaze في Firebase."
+                    isDailyQuotaError(lower) ->
+                    "تم استهلاك الحد اليومي المجاني لنماذج Gemini على المشروع. تقدر تسجّل وجباتك دلوقتي فوراً من قاعدة البيانات الأوفلاين في تاب التغذية بدون أي إنترنت."
 
-                lower.contains("429") || lower.contains("quota") || lower.contains("resource_exhausted") ->
-                    "تم تجاوز حد الطلبات المؤقت لـ Gemini. انتظر دقيقة ثم جرّب مرة تانية."
+                lower.contains("429") || lower.contains("quota") || lower.contains("resource_exhausted") -> {
+                    val waitHint = extractRetrySeconds(details)?.let { " ($it ثانية تقريباً)" } ?: " (حوالي دقيقة)"
+                    "الحد المؤقت لطلبات Gemini اتملّى لحظياً$waitHint. استنى شوية واضغط «إعادة المحاولة»، أو سجّل وجباتك دلوقتي من قاعدة البيانات الأوفلاين."
+                }
 
                 lower.contains("high demand") || lower.contains("503") || lower.contains("overloaded") || lower.contains("unavailable") || lower.contains("try again later") ->
-                    "سيرفرات Gemini عليها ضغط لحظي دلوقتي (High Demand). حاولنا تلقائياً أكتر من مرة — استنى ثواني واضغط «إعادة المحاولة»."
+                    "سيرفرات Gemini عليها ضغط لحظي دلوقتي. استنى ثواني واضغط «إعادة المحاولة»، أو سجّل وجباتك فوراً من قاعدة البيانات الأوفلاين."
 
                 error.anyTimedOut ->
-                    "انتهى وقت انتظار رد Gemini (بعد تجربة النموذج الأساسي والبديل). تأكد من الإنترنت وجرّب مرة تانية."
+                    "انتهى وقت انتظار رد Gemini. تأكد من الإنترنت واضغط «إعادة المحاولة»، أو سجّل وجباتك من قاعدة البيانات الأوفلاين."
 
                 lower.contains("unknownhost") || lower.contains("connect") || lower.contains("network") || lower.contains("socket") ->
-                    "مشكلة في اتصال الإنترنت أثناء الإرسال إلى Gemini."
+                    "مشكلة في اتصال الإنترنت أثناء الإرسال إلى Gemini. تقدر تسجّل وجباتك أوفلاين من تاب التغذية."
 
                 else ->
-                    "تعذّر التحليل بواسطة Gemini."
+                    "تعذّر التحليل بواسطة Gemini حالياً."
             }
             return "$prefix\n$details"
         }
@@ -1739,20 +1760,20 @@ class GeminiAiRepository {
                 "تعذّر التحقق الأمني (App Check / reCAPTCHA) أثناء الاتصال بـ Gemini."
 
             (lower.contains("429") || lower.contains("quota") || lower.contains("resource_exhausted")) &&
-                (lower.contains("per day") || lower.contains("free_tier_requests") || lower.contains("perday")) ->
-                "تم استهلاك الحد اليومي المجاني (Free Tier) لنماذج Gemini. الحد بيتصفّر تلقائيًا بعد الوقت الموضح بالأسفل."
+                isDailyQuotaError(lower) ->
+                "تم استهلاك الحد اليومي المجاني لنماذج Gemini. تقدر تسجّل وجباتك فوراً من قاعدة البيانات الأوفلاين في تاب التغذية."
 
             lower.contains("429") || lower.contains("quota") || lower.contains("resource_exhausted") ->
-                "تم تجاوز حد الطلبات المؤقت لـ Gemini. انتظر دقيقة ثم جرّب مرة تانية."
+                "الحد المؤقت لطلبات Gemini اتملّى لحظياً (حوالي دقيقة). استنى شوية وجرّب تاني، أو سجّل وجباتك أوفلاين دلوقتي."
 
             lower.contains("high demand") || lower.contains("503") || lower.contains("overloaded") || lower.contains("unavailable") || lower.contains("try again later") ->
-                "سيرفرات Gemini عليها ضغط لحظي دلوقتي (High Demand). استنى ثواني وجرّب تاني."
+                "سيرفرات Gemini عليها ضغط لحظي دلوقتي. استنى ثواني وجرّب تاني، أو سجّل وجباتك أوفلاين."
 
             lower.contains("unknownhost") || lower.contains("connect") || lower.contains("network") || lower.contains("socket") ->
                 "مشكلة في اتصال الإنترنت أثناء الإرسال إلى Gemini."
 
             else ->
-                "تعذّر التحليل بواسطة Gemini."
+                "تعذّر التحليل بواسطة Gemini حالياً."
         }
         return "$friendlyPrefix\n[init=$appCheckInitSummary] ($combined)"
     }
