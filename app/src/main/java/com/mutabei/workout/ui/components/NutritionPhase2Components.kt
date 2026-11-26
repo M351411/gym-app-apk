@@ -45,6 +45,8 @@ import androidx.compose.ui.unit.dp
 import com.mutabei.workout.data.model.AiMacroTetrisResult
 import com.mutabei.workout.data.model.FoodItem
 import com.mutabei.workout.data.model.LoggedFoodItem
+import com.mutabei.workout.data.model.MicronutrientEvaluationReport
+import com.mutabei.workout.data.model.MicronutrientStatus
 import com.mutabei.workout.data.model.NutritionConstants
 import com.mutabei.workout.ui.theme.LocalSemanticColors
 import kotlin.math.roundToInt
@@ -171,10 +173,11 @@ fun MacroTetrisCard(
 @Composable
 fun SupplementSynergyCard(
     dayItems: List<LoggedFoodItem>,
-    totalOf: (String) -> Double
+    totalOf: (String) -> Double,
+    microReport: MicronutrientEvaluationReport? = null
 ) {
     val semantic = LocalSemanticColors.current
-    val alerts = remember(dayItems) {
+    val alerts = remember(dayItems, microReport) {
         val out = mutableListOf<Triple<Boolean, String, String>>() // isWarning, title, body
         val suppItems = dayItems.filter { it.mealIndex == NutritionConstants.SUPPLEMENT_MEAL_INDEX }
         val ca = totalOf("ca")
@@ -185,6 +188,49 @@ fun SupplementSynergyCard(
         val vC = totalOf("vC")
         val o3 = totalOf("o3") + totalOf("epa")
         val caf = totalOf("caf")
+
+        // 7-Day Rolling Pool Guardrails for Fat-Soluble Vitamins (A, D3, E, K)
+        microReport?.fatSoluble?.forEach { fs ->
+            if (fs.status == MicronutrientStatus.TOXICITY_WARNING) {
+                val ulTxt = fs.weeklyUl?.roundToInt()?.let { " ($it ${fs.unit}/أسبوع)" } ?: ""
+                out.add(
+                    Triple(
+                        true,
+                        "تحذير حد آمن: ${fs.labelAr} (${fs.sevenDayTotal.roundToInt()} ${fs.unit} / 7 أيام)",
+                        "وصلت للحد الأسبوعي الآمن$ulTxt. أوقف مكملات ${fs.labelAr} والمصادر المركّزة (مثل الكبدة أو الجرعات العالية) لمدة 24–48 ساعة."
+                    )
+                )
+            } else if (fs.status == MicronutrientStatus.APPROACHING_UL) {
+                val ulTxt = fs.weeklyUl?.roundToInt()?.let { " ($it ${fs.unit}/أسبوع)" } ?: ""
+                out.add(
+                    Triple(
+                        true,
+                        "قريب من الحد الآمن: ${fs.labelAr} (${fs.sevenDayTotal.roundToInt()} ${fs.unit} / 7 أيام)",
+                        "مخزونك الأسبوعي اقترب من الحد الآمن$ulTxt. يُفضّل تهدئة الجرعات أو إيقاف المكمل 24–48 ساعة."
+                    )
+                )
+            }
+        }
+
+        // Source-Distinction Guardrail for Supplemental Magnesium (350 mg/day UL applies strictly to supplements)
+        val mgEval = microReport?.dailyByKey?.get("mg")
+        if (mgEval != null && mgEval.status == MicronutrientStatus.TOXICITY_WARNING) {
+            out.add(
+                Triple(
+                    true,
+                    "حد مكملات الماغنسيوم (${mgEval.supplementSource.roundToInt()} / 350 مجم)",
+                    "جرعة الماغنسيوم من المكملات وصلت للحد اليومي الآمن (350 مجم/يوم). ماغنسيوم الأكل الطبيعي آمن تماماً ولا يدخل في هذا الحد."
+                )
+            )
+        } else if (mgEval != null && mgEval.status == MicronutrientStatus.APPROACHING_UL) {
+            out.add(
+                Triple(
+                    true,
+                    "مكملات الماغنسيوم قريبة من الحد (${mgEval.supplementSource.roundToInt()} / 350 مجم)",
+                    "الحد الآمن (350 مجم/يوم) يخص المكملات فقط (أكلك الطبيعي آمن). لا ترفع جرعة المكمل اليوم."
+                )
+            )
+        }
 
         val hasSuppFeOrZn = suppItems.any { it.nutrientAmount("fe") >= 5.0 || it.nutrientAmount("zn") >= 5.0 }
         val hasHighCa = ca >= 500.0
@@ -223,7 +269,7 @@ fun SupplementSynergyCard(
                 )
             )
         }
-        if (suppItems.any { it.nutrientAmount("mg") >= 50.0 } || mg >= 350.0) {
+        if ((mgEval?.supplementSource ?: 0.0) >= 50.0 || suppItems.any { it.nutrientAmount("mg") >= 50.0 } || mg >= 350.0) {
             out.add(
                 Triple(
                     false,

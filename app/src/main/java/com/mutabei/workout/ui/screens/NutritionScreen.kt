@@ -55,6 +55,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.mutabei.workout.R
 import com.mutabei.workout.data.model.LoggedFoodItem
+import com.mutabei.workout.data.model.MicronutrientEngine
+import com.mutabei.workout.data.model.MicronutrientStatus
 import com.mutabei.workout.data.model.NutritionConstants
 import com.mutabei.workout.data.model.NutritionDay
 import com.mutabei.workout.data.model.NutritionTargets
@@ -65,7 +67,9 @@ import com.mutabei.workout.data.model.todayIso
 import com.mutabei.workout.data.repository.NutrientFoodSuggestion
 import com.mutabei.workout.ui.components.AdaptiveTdeeSection
 import com.mutabei.workout.ui.components.AiDeficiencyFixerBlock
+import com.mutabei.workout.ui.components.DailyNutrientRow
 import com.mutabei.workout.ui.components.ExpandableSectionCard
+import com.mutabei.workout.ui.components.FatSolubleDualIndicatorCard
 import com.mutabei.workout.ui.components.FoodBattleDialog
 import com.mutabei.workout.ui.components.MacroTetrisCard
 import com.mutabei.workout.ui.components.MealLeucineMpsChip
@@ -105,6 +109,14 @@ fun NutritionScreen(
 
     val vitDBreakdown = remember(selectedDate, snapshot.nutritionDays) {
         NutritionConstants.computeVitaminDBreakdown(selectedDate, snapshot.nutritionDays)
+    }
+
+    val microReport = remember(selectedDate, snapshot.nutritionDays, snapshot.config.sex) {
+        MicronutrientEngine.evaluateMicronutrients(
+            referenceDate = selectedDate,
+            nutritionDays = snapshot.nutritionDays,
+            sex = snapshot.config.sex
+        )
     }
 
     // Daily totals across all tracked nutrient keys
@@ -517,19 +529,14 @@ fun NutritionScreen(
             item(key = "supplement_synergy") {
                 SupplementSynergyCard(
                     dayItems = day.items,
-                    totalOf = ::totalOf
+                    totalOf = ::totalOf,
+                    microReport = microReport
                 )
             }
 
-            // Daily Micronutrients (grouped cleanly: macros/amino, 12 vitamins, 12 minerals, other)
+            // Daily Micronutrients (Dual-model: 7-day rolling Fat-Soluble pool + Daily-reset Water-Soluble & Minerals)
             item(key = "daily_micros") {
                 val rda = if (snapshot.config.sex == "f") NutritionConstants.RDA_FEMALE else NutritionConstants.RDA_MALE
-                val sections = listOf(
-                    "تفاصيل الماكروز والأحماض والدهون" to NutritionConstants.MICRO_GROUP_MACROS,
-                    "الفيتامينات (12)" to NutritionConstants.MICRO_GROUP_VITAMINS,
-                    "المعادن (12)" to NutritionConstants.MICRO_GROUP_MINERALS,
-                    "أخرى" to NutritionConstants.MICRO_GROUP_OTHER
-                )
                 val missingMicroCount = remember(day.items) {
                     val allTracked = NutritionConstants.MICRO_GROUP_MACROS +
                         NutritionConstants.MICRO_GROUP_VITAMINS +
@@ -587,11 +594,62 @@ fun NutritionScreen(
                             }
                         }
                     }
-                    sections.forEachIndexed { sIdx, (sectionTitle, keys) ->
-                        if (sIdx > 0) {
-                            Spacer(Modifier.height(10.dp))
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
-                        }
+                    // 1. Fat-Soluble Vitamins (A, D3, E, K) -> 7-Day Rolling Reserve Pool Dual-Indicator
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "الفيتامينات الذائبة في الدهون (مخزون 7 أيام متجدد)",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "تُخزّن في الجسم ولا تُصفّر منتصف الليل — يُحسب مخزون آخر 7 أيام (اليوم + 6 أيام سابقة).",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp, bottom = 4.dp)
+                    )
+                    microReport.fatSoluble.forEach { fsEval ->
+                        FatSolubleDualIndicatorCard(eval = fsEval)
+                    }
+
+                    // 2. Water-Soluble Vitamins (B-Complex, C) -> Daily Reset
+                    Spacer(Modifier.height(10.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "الفيتامينات الذائبة في الماء (تتجدد يومياً)",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    MicronutrientEngine.WATER_SOLUBLE_KEYS.forEach { k ->
+                        val eval = microReport.dailyByKey[k] ?: return@forEach
+                        DailyNutrientRow(eval = eval)
+                    }
+
+                    // 3. Minerals (12) -> Daily Reset + Food vs Supplement UL Distinction
+                    Spacer(Modifier.height(10.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "المعادن (12 — تتجدد يومياً)",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    MicronutrientEngine.MINERAL_KEYS.forEach { k ->
+                        val eval = microReport.dailyByKey[k] ?: return@forEach
+                        DailyNutrientRow(eval = eval)
+                    }
+
+                    // 4. Macro/Amino/Fatty Acid Breakdown & Other Tracked Nutrients
+                    val extraSections = listOf(
+                        "تفاصيل الماكروز والأحماض والدهون" to NutritionConstants.MICRO_GROUP_MACROS,
+                        "أخرى" to NutritionConstants.MICRO_GROUP_OTHER
+                    )
+                    extraSections.forEach { (sectionTitle, keys) ->
+                        Spacer(Modifier.height(10.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
                         Spacer(Modifier.height(6.dp))
                         Text(
                             text = sectionTitle,
@@ -606,13 +664,6 @@ fun NutritionScreen(
                             val isLim = k in NutritionConstants.LIMIT_KEYS
                             val formattedVal = (v * 10).roundToInt() / 10.0
                             val unit = NutritionConstants.NUTRIENT_UNITS[k] ?: ""
-                            val valueText = if (k == "vD") {
-                                val iuCur = (v * 40.0).roundToInt()
-                                val iuTarget = (targetVal * 40.0).roundToInt()
-                                "$iuCur / $iuTarget IU ($formattedVal مكجم)"
-                            } else {
-                                "$formattedVal / ${if (isLim) "حد " else ""}$targetVal $unit"
-                            }
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween
@@ -622,7 +673,7 @@ fun NutritionScreen(
                                     style = MaterialTheme.typography.bodySmall
                                 )
                                 Text(
-                                    text = valueText,
+                                    text = "$formattedVal / ${if (isLim) "حد " else ""}$targetVal $unit",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
@@ -632,23 +683,6 @@ fun NutritionScreen(
                                 target = targetVal,
                                 barColor = if (isLim && v > targetVal) semantic.low else MaterialTheme.colorScheme.primary
                             )
-                            if (k == "vD" && (vitDBreakdown.carryInIu > 0 || vitDBreakdown.carryOutIu > 0)) {
-                                val note = when {
-                                    vitDBreakdown.carryInIu > 0 && vitDBreakdown.carryOutIu > 0 ->
-                                        "استثناء فيتامين D: +${vitDBreakdown.carryInIu} IU من أمس وترحيل ${vitDBreakdown.carryOutIu} IU لغداً"
-                                    vitDBreakdown.carryInIu > 0 ->
-                                        "استثناء فيتامين D: +${vitDBreakdown.carryInIu} IU مُرحّلة من جرعة أمس (يوم أه ويوم لا)"
-                                    else ->
-                                        "استثناء فيتامين D: تم احتساب 5000 IU اليوم وترحيل ${vitDBreakdown.carryOutIu} IU لليوم التالي"
-                                }
-                                Text(
-                                    text = note,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = semantic.ok,
-                                    fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.padding(top = 2.dp)
-                                )
-                            }
                         }
                     }
                     val foodMoisture = totalOf("wat")
@@ -1099,22 +1133,23 @@ private fun WeeklyMicrosCard(
         .sortedBy { it.date }
         .takeLast(7)
 
-    val rows = remember(days, rda, snapshot.nutritionDays) {
+    val microReportToday = remember(today, snapshot.nutritionDays, snapshot.config.sex) {
+        MicronutrientEngine.evaluateMicronutrients(
+            referenceDate = today,
+            nutritionDays = snapshot.nutritionDays,
+            sex = snapshot.config.sex
+        )
+    }
+
+    val rows = remember(days, rda, microReportToday) {
         if (days.size < 3) return@remember emptyList<Pair<String, Double>>()
         val count = NutritionConstants.NUTRIENT_COUNT
-        val vDIdx = NutritionConstants.NUTRIENT_INDEX["vD"] ?: -1
         val sum = DoubleArray(count)
         val has = BooleanArray(count)
         days.forEach { d ->
-            val dayVd = NutritionConstants.computeVitaminDBreakdown(d.date, snapshot.nutritionDays)
-            val dayHasRawVd = vDIdx >= 0 && d.items.any { (it.nutrients.getOrNull(vDIdx) ?: -1.0) >= 0.0 }
-            if (vDIdx >= 0 && (dayHasRawVd || dayVd.effectiveMcg > 0.0 || dayVd.carryInFromYesterdayMcg > 0.0)) {
-                sum[vDIdx] += dayVd.effectiveMcg
-                has[vDIdx] = true
-            }
             d.items.forEach { item ->
                 item.nutrients.forEachIndexed { idx, v ->
-                    if (idx < count && idx != vDIdx && v >= 0.0) {
+                    if (idx < count && v >= 0.0) {
                         sum[idx] += v * item.grams / 100.0
                         has[idx] = true
                     }
@@ -1122,13 +1157,26 @@ private fun WeeklyMicrosCard(
             }
         }
         rda.entries.mapNotNull { (k, target) ->
+            // Fat-soluble vitamins (A, D3, E, K) use the exact 7-Day Rolling Pool percentage
+            val fs = microReportToday.fatSolubleByKey[k]
+            if (fs != null) {
+                return@mapNotNull if (!fs.hasAnyDataInWindow) null else k to fs.weeklyPercentage
+            }
             val idx = NutritionConstants.NUTRIENT_INDEX[k] ?: return@mapNotNull null
             if (!has[idx]) null else k to ((sum[idx] / days.size) / target * 100.0)
         }
     }
 
-    val lowThree = remember(rows) {
-        rows.filter { (k, pct) -> k !in NutritionConstants.LIMIT_KEYS && pct < 70.0 }
+    val lowThree = remember(rows, microReportToday) {
+        rows.filter { (k, pct) ->
+            if (k in NutritionConstants.LIMIT_KEYS) return@filter false
+            val fs = microReportToday.fatSolubleByKey[k]
+            if (fs != null) {
+                fs.status == MicronutrientStatus.NEEDS_TOP_UP && fs.weeklyPercentage < 70.0
+            } else {
+                pct < 70.0
+            }
+        }
             .sortedBy { it.second }
             .take(3)
     }
@@ -1205,7 +1253,15 @@ private fun WeeklyMicrosCard(
                 result = deficiencyAi.result,
                 onRequestFix = {
                     val allLow = rows
-                        .filter { (k, pct) -> k !in NutritionConstants.LIMIT_KEYS && pct < 75.0 }
+                        .filter { (k, pct) ->
+                            if (k in NutritionConstants.LIMIT_KEYS) return@filter false
+                            val fs = microReportToday.fatSolubleByKey[k]
+                            if (fs != null) {
+                                fs.status == MicronutrientStatus.NEEDS_TOP_UP && fs.weeklyPercentage < 75.0
+                            } else {
+                                pct < 75.0
+                            }
+                        }
                         .sortedBy { it.second }
                         .take(6)
                     onRequestAiFix(allLow)

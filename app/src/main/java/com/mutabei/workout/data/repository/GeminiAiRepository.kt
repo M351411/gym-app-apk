@@ -61,6 +61,15 @@ private const val RPM_QUOTA_COOLDOWN_MS = 60_000L
 private const val FULL_MICRONUTRIENT_INSTRUCTION =
     "Never return null or skip micronutrients. Always estimate full micronutrient values based on USDA FoodData Central and Egyptian Food Composition Tables for the exact weight provided. Only return 0 if the food genuinely contains zero of that nutrient (e.g., cholesterol in plant foods)."
 
+private const val MICRONUTRIENT_BEHAVIOR_RULES = """
+MICRONUTRIENT EVALUATION & SAFETY RULES (STRICT):
+1. Vitamin D3 Baseline: Respect the user's custom 5,000 IU/day Vitamin D3 target (35,000 IU/week target, 70,000 IU/week upper limit). NEVER warn against 5,000 IU/day or treat it as excessive.
+2. Fat-Soluble 7-Day Buffer Respect (Vitamins A, D3, E, K): If any fat-soluble vitamin has status == "WEEKLY_BUFFER_ACTIVE", do NOT tell the user they are deficient today even if today_intake is 0, and do NOT prioritize foods just to boost that vitamin.
+3. Fat-Soluble Deficit Correction: Only recommend foods rich in Vitamin A, D3, E, or K when status == "NEEDS_TOP_UP" and remaining_weekly_pool > 0.
+4. Fat-Soluble Toxicity Guardrail: If any fat-soluble vitamin hits status == "APPROACHING_UL" or "TOXICITY_WARNING", explicitly advise the user to pause supplements or high-concentration sources (such as beef/chicken liver or high-dose Vitamin D3) for 24–48 hours.
+5. Daily Water-Soluble Vitamins & Minerals (B-Complex, Vitamin C, Magnesium, Zinc, Iron, Calcium, Potassium, Sodium): Base recommendations strictly on remaining_today. For Magnesium, the 350 mg/day Tolerable Upper Intake Level (UL) applies ONLY to supplement_source — NEVER warn about whole-food Magnesium intake.
+"""
+
 private class GeminiStreamStageException(
     val primaryModel: String,
     val primarySummary: String,
@@ -470,6 +479,8 @@ class GeminiAiRepository {
         5. حط `suggested_targets` بس لو اللاعب طلب تعديل أهداف السعرات/الماكروز أو لقيت فعلاً سبب رقمي واضح للتعديل. وإلا خليها null.
         6. حط `suggested_foods` (1-3 أكلات مصرية بالجرامات والماكروز) فقط لما تقترح وجبة أو سناك **مستقبلي لسه مأكلوش** يقدر يضيفه بضغطة واحدة.
         7. استخدم تنسيق بسيط ونقاط واضحة بدون حشو طويل.
+        8. التزم بقواعد تقييم الميكروز والفيتامينات الذائبة في الدهون (7-Day Rolling Pool) بدقة عند قراءة `micronutrient_evaluation_json`:
+        $MICRONUTRIENT_BEHAVIOR_RULES
     """.trimIndent()
 
     private val deficiencyModels by lazy {
@@ -843,6 +854,7 @@ class GeminiAiRepository {
         deficientSummary: String,
         goal: String,
         remainingKcal: Int?,
+        micronutrientEvalJson: String? = null,
         onProgress: (String) -> Unit = {}
     ): Result<AiDeficiencyFixResult> = runAiCall {
         val goalLabel = when (goal) {
@@ -851,12 +863,17 @@ class GeminiAiRepository {
             else -> "تضخيم عضلي نظيف"
         }
         val kcalHint = remainingKcal?.let { "متبقي اليوم حوالي $it سعر." } ?: ""
+        val evalBlock = if (!micronutrientEvalJson.isNullOrBlank()) {
+            "\nبيانات تقييم الميكروز المهيكلة (7-Day Rolling Pool للفيتامينات الذائبة في الدهون + اليومي للباقي):\n$micronutrientEvalJson\n"
+        } else ""
         val prompt = """
             أنت خبير تغذية رياضية في مصر.
-            المستخدم عنده نقص في العناصر الغذائية دي خلال آخر أسبوع (كنسبة من الاحتياج اليومي RDA):
+            المستخدم عنده نقص في العناصر الغذائية دي (بعد تطبيق قاعدة الـ 7 أيام للفيتامينات الذائبة في الدهون والاحتياج اليومي لباقي العناصر):
             $deficientSummary
+            $evalBlock
             هدف المستخدم: $goalLabel. $kcalHint
-            اقترح 4 إلى 5 أكلات مصرية حقيقية ومتوفرة بسهولة (مثل: سردين، ماكريل، كبدة، بيض، جبنة قريش، سبانخ، ملوخية، فول، عدس، بذور يقطين/سمسم/طحينة، زبادي، برتقال، جوافة، بطاطا، شوفان) تسد أكبر قدر من العجز ده بأعلى كثافة غذائية وأقل سعرات.
+            $MICRONUTRIENT_BEHAVIOR_RULES
+            اقترح 4 إلى 5 أكلات مصرية حقيقية ومتوفرة بسهولة (مثل: سردين، ماكريل، كبدة، بيض، جبنة قريش، سبانخ، ملوخية، فول، عدس، بذور يقطين/سمسم/طحينة، زبادي، برتقال، جوافة، بطاطا، شوفان) تسد أكبر قدر من العجز الفعلي بأعلى كثافة غذائية وأقل سعرات، وتجنّب تماماً أي فيتامين ذائب في الدهون حالته WEEKLY_BUFFER_ACTIVE أو APPROACHING_UL أو TOXICITY_WARNING.
             اكتب كل شيء بالعربية المصرية الواضحة والعملية، وحدد الجرامات والسعرات التقريبية بدقة.
         """.trimIndent()
 
@@ -918,6 +935,7 @@ class GeminiAiRepository {
             - next_week_actions: 3 خطوات رقمية محددة جدًا للأسبوع الجاي.
             - suggested_targets: اقترح سعرات وماكروز جديدة فقط لو فيه داعي حقيقي (مثلاً ثبات وزن غير مقصود، عجز كبير، أو بروتين أقل من 1.8 جم/كجم). وإلا خليها null.
             - suggested_foods: 1 إلى 3 أكلات مصرية عملية بالجرامات والماكروز تسد أكبر فجوة عند اللاعب (بروتين أو ميكروز).
+            $MICRONUTRIENT_BEHAVIOR_RULES
         """.trimIndent()
 
         val rawText = executeTextJson(
@@ -1161,10 +1179,14 @@ class GeminiAiRepository {
         remFatG: Int,
         goal: String,
         favoriteNames: List<String>,
+        micronutrientEvalJson: String? = null,
         onProgress: (String) -> Unit = {}
     ): Result<AiMacroTetrisResult> = runAiCall {
         val favHint = if (favoriteNames.isNotEmpty()) {
             "أكلات المستخدم المفضلة (يمكنك استخدام بعضها لو مناسب): ${favoriteNames.take(10).joinToString("، ")}."
+        } else ""
+        val evalBlock = if (!micronutrientEvalJson.isNullOrBlank()) {
+            "\nحالة الميكروز الحالية (7-Day Rolling Pool للفيتامينات A/D3/E/K + اليومي لباقي العناصر):\n$micronutrientEvalJson\n"
         } else ""
         val prompt = """
             أنت مهندس تغذية رياضية في مصر.
@@ -1175,7 +1197,9 @@ class GeminiAiRepository {
             - الدهون المتبقية: $remFatG جم
             - الهدف: $goal
             $favHint
-            صمّم 2 إلى 3 اختيارات وجبات أو سناكس مصرية عملية وسريعة التحضير (مثل: جبنة قريش، بيض، تونة مصفاة، صدور فراخ، زبادي يوناني، شوفان، بطاطا، رز، عيش بلدي، موز، فول، واي بروتين) بحيث كل اختيار يقرب جدًا من السعرات والماكروز المتبقية ويوصل لـ ≥ 2.5 جم ليوسين لو البروتين المتبقي ≥ 25 جم.
+            $evalBlock
+            $MICRONUTRIENT_BEHAVIOR_RULES
+            صمّم 2 إلى 3 اختيارات وجبات أو سناكس مصرية عملية وسريعة التحضير (مثل: جبنة قريش، بيض، تونة مصفاة، صدور فراخ، زبادي يوناني، شوفان، بطاطا، رز، عيش بلدي، موز، فول، واي بروتين) بحيث كل اختيار يقرب جدًا من السعرات والماكروز المتبقية ويوصل لـ ≥ 2.5 جم ليوسين لو البروتين المتبقي ≥ 25 جم، مع مراعاة قواعد الميكروز أعلاه.
             اكتب الجرامات الدقيقة لكل مكون بالعربي.
         """.trimIndent()
 

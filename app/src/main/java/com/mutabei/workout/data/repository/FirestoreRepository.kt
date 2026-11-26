@@ -14,6 +14,7 @@ import com.mutabei.workout.data.model.CustomFood
 import com.mutabei.workout.data.model.NutritionDay
 import com.mutabei.workout.data.model.UserConfig
 import com.mutabei.workout.data.model.WorkoutSession
+import com.mutabei.workout.data.model.shiftIsoDate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -98,6 +99,63 @@ class FirestoreRepository(
                 .map { snapshot ->
                     snapshot.documents.mapNotNull { NutritionDay.fromSnapshot(it) }
                         .associateBy { it.id }
+                }
+                .catch { error ->
+                    logStreamErrorIfAuthenticated(error, OperationType.LIST, path, userId)
+                    throw error
+                }
+        )
+    }
+
+    /**
+     * Fetches the 7-day rolling nutrition window (endDateIso + past 6 calendar days)
+     * in a single range query against the indexed `date` field inside the user-scoped
+     * `users/{userId}/nutritionDays` subcollection (zero N+1 read overhead).
+     */
+    suspend fun fetchSevenDayNutritionWindow(
+        userId: String,
+        endDateIso: String
+    ): Result<Map<String, NutritionDay>> {
+        val startDateIso = shiftIsoDate(endDateIso, -6)
+        val path = "users/$userId/nutritionDays[$startDateIso..$endDateIso]"
+        return try {
+            val uid = requireUserId(userId)
+            val snap = userDoc(uid)
+                .collection("nutritionDays")
+                .whereGreaterThanOrEqualTo("date", startDateIso)
+                .whereLessThanOrEqualTo("date", endDateIso)
+                .get()
+                .await()
+            val byDate = snap.documents
+                .mapNotNull { NutritionDay.fromSnapshot(it) }
+                .associateBy { it.date.ifBlank { it.id } }
+            Result.success(byDate)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, path)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Reactive single-query stream for a 7-day rolling nutrition window (endDateIso + past 6 days).
+     */
+    fun observeSevenDayNutritionWindow(
+        userId: String,
+        endDateIso: String
+    ): Flow<Map<String, NutritionDay>> = flow {
+        val startDateIso = shiftIsoDate(endDateIso, -6)
+        val path = "users/$userId/nutritionDays[$startDateIso..$endDateIso]"
+        emitAll(
+            userDoc(userId).collection("nutritionDays")
+                .whereGreaterThanOrEqualTo("date", startDateIso)
+                .whereLessThanOrEqualTo("date", endDateIso)
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.documents
+                        .mapNotNull { NutritionDay.fromSnapshot(it) }
+                        .associateBy { it.date.ifBlank { it.id } }
                 }
                 .catch { error ->
                     logStreamErrorIfAuthenticated(error, OperationType.LIST, path, userId)

@@ -22,6 +22,9 @@ import com.mutabei.workout.data.model.ExerciseSpec
 import com.mutabei.workout.data.model.FoodItem
 import com.mutabei.workout.data.model.LoggedExercise
 import com.mutabei.workout.data.model.LoggedFoodItem
+import com.mutabei.workout.data.model.MicronutrientEngine
+import com.mutabei.workout.data.model.MicronutrientEvaluationReport
+import com.mutabei.workout.data.model.MicronutrientStatus
 import com.mutabei.workout.data.model.NutritionConstants
 import com.mutabei.workout.data.model.NutritionDay
 import com.mutabei.workout.data.model.NutritionTargets
@@ -1044,18 +1047,58 @@ class MainViewModel(
         saveCustomFood(preset)
     }
 
+    /**
+     * Evaluates the 7-day rolling micronutrient pool using a single Firestore range query
+     * (today + past 6 days) without N+1 reads, falling back to cached snapshot data if offline.
+     */
+    suspend fun fetchSevenDayMicronutrientEvaluation(
+        referenceDate: String = _selectedNutritionDate.value
+    ): MicronutrientEvaluationReport {
+        val snap = currentSnapshot()
+        val windowMap = firestoreRepo.fetchSevenDayNutritionWindow(currentUserId, referenceDate)
+            .getOrElse { snap.nutritionDays }
+        return MicronutrientEngine.evaluateMicronutrients(
+            referenceDate = referenceDate,
+            nutritionDays = windowMap,
+            sex = snap.config.sex
+        )
+    }
+
     fun requestDeficiencyAiAdvice(lowPairs: List<Pair<String, Double>>, remainingKcal: Int?) {
-        if (lowPairs.isEmpty()) {
-            showToast("مفيش عناصر ناقصة تحت 70% حاليًا — ممتاز!")
+        val snap = currentSnapshot()
+        val refDate = _selectedNutritionDate.value
+        val evalReport = MicronutrientEngine.evaluateMicronutrients(
+            referenceDate = refDate,
+            nutritionDays = snap.nutritionDays,
+            sex = snap.config.sex
+        )
+        // Never flag fat-soluble vitamins as deficient if their 7-day weekly buffer is already met or near UL
+        val filteredLowPairs = lowPairs.filter { (key, _) ->
+            val fatEval = evalReport.fatSolubleByKey[key]
+            fatEval == null || fatEval.status == MicronutrientStatus.NEEDS_TOP_UP
+        }
+        if (filteredLowPairs.isEmpty()) {
+            showToast("مفيش عناصر ناقصة فعلياً (مخزون الفيتامينات الذائبة في الدهون مكتمل) — ممتاز!")
             return
         }
-        val summary = lowPairs.joinToString("\n") { (k, pct) ->
-            "- ${NutritionConstants.NUTRIENT_LABELS[k] ?: k}: ${pct.roundToInt()}% من الاحتياج اليومي"
+        val summary = filteredLowPairs.joinToString("\n") { (k, pct) ->
+            val fatEval = evalReport.fatSolubleByKey[k]
+            if (fatEval != null) {
+                "- ${fatEval.labelAr} (${fatEval.labelEn}, 7-day pool): ${fatEval.weeklyPercentage.roundToInt()}% من الهدف الأسبوعي (متبقي ${fatEval.remainingWeeklyPool.roundToInt()} ${fatEval.unit}، الحالة: ${fatEval.status.wireValue})"
+            } else {
+                val dailyEval = evalReport.dailyByKey[k]
+                if (dailyEval != null) {
+                    "- ${dailyEval.labelAr}: ${pct.roundToInt()}% (متبقي اليوم ${((dailyEval.remainingToday * 10).roundToInt() / 10.0)} ${dailyEval.unit})"
+                } else {
+                    "- ${NutritionConstants.NUTRIENT_LABELS[k] ?: k}: ${pct.roundToInt()}% من الاحتياج اليومي"
+                }
+            }
         }
-        val goal = currentSnapshot().config.goal
+        val goal = snap.config.goal
+        val evalJson = evalReport.toGeminiJson()
         viewModelScope.launch {
             _deficiencyAi.value = AiDeficiencyUiState(busyMessage = "Gemini بيختارلك أفضل أكلات مصرية لسد العجز...")
-            val res = geminiRepo.suggestDeficiencyFoods(summary, goal, remainingKcal) { stage ->
+            val res = geminiRepo.suggestDeficiencyFoods(summary, goal, remainingKcal, evalJson) { stage ->
                 _deficiencyAi.update { it.copy(busyMessage = stage) }
             }
             res.fold(
@@ -1170,7 +1213,13 @@ class MainViewModel(
             "النهارده لسه لم يتم تسجيل أكل أو ماء.$todayVdNote$remLine"
         }
 
-        // 4) 7-day nutrition averages + micronutrient deficits
+        // 4) 7-day nutrition averages + Dual-Model Micronutrient Evaluation (7-day Fat-Soluble Pool + Daily Reset)
+        val microEval = MicronutrientEngine.evaluateMicronutrients(
+            referenceDate = today,
+            nutritionDays = snap.nutritionDays,
+            sex = snap.config.sex
+        )
+        val microEvalJson = microEval.toGeminiJson()
         val nutDays = snap.nutritionDays.values
             .filter { it.date <= today && it.items.isNotEmpty() }
             .sortedBy { it.date }
@@ -1181,37 +1230,17 @@ class MainViewModel(
             val avgC = (nutDays.sumOf { d -> d.items.sumOf { it.nutrientAmount("c") } } / nutDays.size).roundToInt()
             val avgF = (nutDays.sumOf { d -> d.items.sumOf { it.nutrientAmount("f") } } / nutDays.size).roundToInt()
             val avgWater = (nutDays.sumOf { it.waterMl } / nutDays.size)
-            val rda = if (snap.config.sex == "f") NutritionConstants.RDA_FEMALE else NutritionConstants.RDA_MALE
-            val count = NutritionConstants.NUTRIENT_COUNT
-            val vDIdx = NutritionConstants.NUTRIENT_INDEX["vD"] ?: -1
-            val sum = DoubleArray(count)
-            val has = BooleanArray(count)
-            nutDays.forEach { d ->
-                val dayVd = NutritionConstants.computeVitaminDBreakdown(d.date, snap.nutritionDays)
-                val dayHasRawVd = vDIdx >= 0 && d.items.any { (it.nutrients.getOrNull(vDIdx) ?: -1.0) >= 0.0 }
-                if (vDIdx >= 0 && (dayHasRawVd || dayVd.effectiveMcg > 0.0 || dayVd.carryInFromYesterdayMcg > 0.0)) {
-                    sum[vDIdx] += dayVd.effectiveMcg
-                    has[vDIdx] = true
-                }
-                d.items.forEach { item ->
-                    item.nutrients.forEachIndexed { idx, v ->
-                        if (idx < count && idx != vDIdx && v >= 0.0) {
-                            sum[idx] += v * item.grams / 100.0
-                            has[idx] = true
-                        }
-                    }
-                }
-            }
-            val lows = rda.entries.mapNotNull { (k, t) ->
-                val idx = NutritionConstants.NUTRIENT_INDEX[k] ?: return@mapNotNull null
-                if (!has[idx] || k in NutritionConstants.LIMIT_KEYS) null
-                else {
-                    val pct = (sum[idx] / nutDays.size) / t * 100.0
-                    if (pct < 70.0) "${NutritionConstants.NUTRIENT_LABELS[k] ?: k} (${pct.roundToInt()}%)" else null
-                }
-            }.take(6)
+            val fatLows = microEval.fatSoluble
+                .filter { it.status == MicronutrientStatus.NEEDS_TOP_UP }
+                .map { "${it.labelAr} (${it.weeklyPercentage.roundToInt()}% أسبوعياً)" }
+            val dailyLows = microEval.dailyNutrients
+                .filter { !it.isLimitKey && it.hasDataToday && it.dailyPercentage < 70.0 }
+                .sortedBy { it.dailyPercentage }
+                .take(4)
+                .map { "${it.labelAr} (${it.dailyPercentage.roundToInt()}% اليوم)" }
+            val lows = (fatLows + dailyLows).take(6)
             "متوسط آخر ${nutDays.size} أيام: $avgKcal سعر (هدف ${targets?.kcal ?: "?"})، بروتين ${avgP}جم (هدف ${targets?.proteinG ?: "?"})، كارب ${avgC}جم (هدف ${targets?.carbsG ?: "?"})، دهون ${avgF}جم (هدف ${targets?.fatG ?: "?"})، ماء ${avgWater}مل. " +
-                if (lows.isNotEmpty()) "أبرز نقص ميكروز: ${lows.joinToString("، ")}." else "الميكروز متوازنة."
+                if (lows.isNotEmpty()) "أبرز نقص فعلي: ${lows.joinToString("، ")}." else "الميكروز متوازنة."
         } else {
             "لم يتم تسجيل أيام تغذية بعد."
         }
@@ -1272,6 +1301,7 @@ class MainViewModel(
             $todaySplitDetail
             تغذية اليوم: $todayNutText
             ملخص التغذية (آخر 7 أيام): $nut7Text
+            micronutrient_evaluation_json: $microEvalJson
             قياسات الجسم / InBody: $bodyText
             $prevPlanText
         """.trimIndent()
@@ -1656,6 +1686,11 @@ class MainViewModel(
     fun requestMacroTetris(remKcal: Int, remProteinG: Int, remCarbsG: Int, remFatG: Int) {
         val snap = currentSnapshot()
         val favNames = snap.customFoods.filter { it.favorite || it.custom }.map { it.name }
+        val microEvalJson = MicronutrientEngine.evaluateMicronutrients(
+            referenceDate = _selectedNutritionDate.value,
+            nutritionDays = snap.nutritionDays,
+            sex = snap.config.sex
+        ).toGeminiJson()
         viewModelScope.launch {
             _macroTetrisAi.value = AiMacroTetrisUiState(busyMessage = "Gemini بيصمم لك وجبة تقفّل باقي ماكروز النهارده...")
             val res = geminiRepo.suggestMacroTetrisMeals(
@@ -1664,7 +1699,8 @@ class MainViewModel(
                 remCarbsG = remCarbsG.coerceAtLeast(0),
                 remFatG = remFatG.coerceAtLeast(0),
                 goal = snap.config.goal,
-                favoriteNames = favNames
+                favoriteNames = favNames,
+                micronutrientEvalJson = microEvalJson
             ) { stage ->
                 _macroTetrisAi.update { it.copy(busyMessage = stage) }
             }

@@ -1,0 +1,337 @@
+package com.mutabei.workout.ui.components
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.mutabei.workout.data.model.DailyNutrientEvaluation
+import com.mutabei.workout.data.model.FatSolubleEvaluation
+import com.mutabei.workout.data.model.MicronutrientStatus
+import com.mutabei.workout.ui.theme.LocalSemanticColors
+import kotlin.math.roundToInt
+
+/**
+ * Dual-Indicator card for Fat-Soluble Vitamins (A, D3, E, K):
+ * Row 1: Today's Intake vs Daily Target Base
+ * Row 2: 7-Day Rolling Reserve Pool (Today + Past 6 Days) vs Weekly Target, Average & Remaining Pool
+ */
+@Composable
+fun FatSolubleDualIndicatorCard(
+    eval: FatSolubleEvaluation,
+    modifier: Modifier = Modifier
+) {
+    val semantic = LocalSemanticColors.current
+    val badgeColor: Color = when (eval.status) {
+        MicronutrientStatus.TOXICITY_WARNING -> semantic.low
+        MicronutrientStatus.APPROACHING_UL -> semantic.warn
+        MicronutrientStatus.WEEKLY_BUFFER_ACTIVE -> semantic.ok
+        MicronutrientStatus.NEEDS_TOP_UP -> semantic.warn
+        MicronutrientStatus.ON_TRACK -> MaterialTheme.colorScheme.primary
+    }
+
+    val reserveBarColor: Color = when (eval.status) {
+        MicronutrientStatus.TOXICITY_WARNING -> semantic.low
+        MicronutrientStatus.APPROACHING_UL -> semantic.warn
+        MicronutrientStatus.WEEKLY_BUFFER_ACTIVE -> semantic.ok
+        MicronutrientStatus.NEEDS_TOP_UP -> MaterialTheme.colorScheme.primary
+        MicronutrientStatus.ON_TRACK -> MaterialTheme.colorScheme.primary
+    }
+
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.background,
+        border = BorderStroke(
+            width = 1.dp,
+            color = when (eval.status) {
+                MicronutrientStatus.TOXICITY_WARNING -> semantic.low.copy(alpha = 0.65f)
+                MicronutrientStatus.APPROACHING_UL -> semantic.warn.copy(alpha = 0.55f)
+                MicronutrientStatus.WEEKLY_BUFFER_ACTIVE -> semantic.ok.copy(alpha = 0.45f)
+                else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+            }
+        ),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .testTag("fat_soluble_card_${eval.key}")
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            // Header: Vitamin name + status badge
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = eval.labelAr + if (!eval.hasAnyDataInWindow) " (مفيش بيانات)" else "",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = badgeColor.copy(alpha = 0.14f),
+                    border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.45f)),
+                    modifier = Modifier.testTag("fat_soluble_badge_${eval.key}")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val badgeIcon = when (eval.status) {
+                            MicronutrientStatus.TOXICITY_WARNING,
+                            MicronutrientStatus.APPROACHING_UL -> Icons.Rounded.Warning
+                            MicronutrientStatus.WEEKLY_BUFFER_ACTIVE -> Icons.Rounded.CheckCircle
+                            else -> Icons.Rounded.Shield
+                        }
+                        Icon(
+                            imageVector = badgeIcon,
+                            contentDescription = null,
+                            tint = badgeColor,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            text = eval.uiBadge,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = badgeColor
+                        )
+                    }
+                }
+            }
+
+            // Indicator 1: Today's Intake vs Daily Base
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "اليوم",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "${fmtMicro(eval.todayIntake, eval.unit)} / ${fmtMicro(eval.dailyTargetBase, eval.unit)} ${eval.unit}",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            MetricProgressBar(
+                current = eval.todayIntake,
+                target = eval.dailyTargetBase.coerceAtLeast(1.0),
+                barColor = if (eval.todayIntake >= eval.dailyTargetBase) semantic.ok else MaterialTheme.colorScheme.secondary
+            )
+            if (eval.todaySupplementSource > 0.0 && eval.todayFoodSource > 0.0) {
+                Text(
+                    text = "اليوم: أكل ${fmtMicro(eval.todayFoodSource, eval.unit)} · مكملات ${fmtMicro(eval.todaySupplementSource, eval.unit)} ${eval.unit}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(Modifier.height(2.dp))
+
+            // Indicator 2: 7-Day Rolling Reserve Pool
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "مخزون 7 أيام (${eval.weeklyPercentage.roundToInt()}%)",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = reserveBarColor
+                )
+                Text(
+                    text = "${fmtMicro(eval.sevenDayTotal, eval.unit)} / ${fmtMicro(eval.weeklyTarget, eval.unit)} ${eval.unit}",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            MetricProgressBar(
+                current = eval.sevenDayTotal,
+                target = eval.weeklyTarget.coerceAtLeast(1.0),
+                barColor = reserveBarColor
+            )
+
+            // Weekly average + Remaining weekly pool
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "متوسط 7 أيام: ${fmtMicro(eval.sevenDayAvg, eval.unit)} ${eval.unit}/يوم",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = if (eval.remainingWeeklyPool > 0.0) {
+                        "متبقي: ${fmtMicro(eval.remainingWeeklyPool, eval.unit)} ${eval.unit}"
+                    } else {
+                        "المخزون الأسبوعي مُغطى"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (eval.remainingWeeklyPool <= 0.0) semantic.ok else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // Safety guardrail for APPROACHING_UL / TOXICITY_WARNING
+            if (eval.status == MicronutrientStatus.TOXICITY_WARNING ||
+                eval.status == MicronutrientStatus.APPROACHING_UL
+            ) {
+                val ulVal = eval.weeklyUl
+                val isTox = eval.status == MicronutrientStatus.TOXICITY_WARNING
+                val guardrailColor = if (isTox) semantic.low else semantic.warn
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = guardrailColor.copy(alpha = 0.12f),
+                    border = BorderStroke(1.dp, guardrailColor.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = buildString {
+                            if (isTox) {
+                                append("وصلت للحد الأسبوعي الآمن")
+                            } else {
+                                append("اقتربت من الحد الأسبوعي الآمن")
+                            }
+                            if (ulVal != null) {
+                                append(" (${fmtMicro(ulVal, eval.unit)} ${eval.unit}/أسبوع)")
+                            }
+                            append(". يُنصح بإيقاف المكملات أو المصادر المركّزة (مثل الكبدة أو الجرعات العالية) لمدة 24–48 ساعة.")
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = guardrailColor,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Daily-reset row for Water-Soluble Vitamins (B-Complex, C) and Minerals.
+ * Enforces food_source vs supplement_source distinction so supplement-only ULs
+ * (like Magnesium 350 mg/day) never trigger false toxicity warnings from whole foods.
+ */
+@Composable
+fun DailyNutrientRow(
+    eval: DailyNutrientEvaluation,
+    modifier: Modifier = Modifier
+) {
+    val semantic = LocalSemanticColors.current
+    val unit = eval.unit
+    val valueText = "${fmtMicro(eval.todayIntake, unit)} / ${if (eval.isLimitKey) "حد " else ""}${fmtMicro(eval.dailyTarget, unit)} $unit"
+
+    val barColor = when {
+        eval.status == MicronutrientStatus.TOXICITY_WARNING -> semantic.low
+        eval.status == MicronutrientStatus.APPROACHING_UL -> semantic.warn
+        eval.isLimitKey && eval.todayIntake > eval.dailyTarget -> semantic.low
+        !eval.isLimitKey && eval.todayIntake >= eval.dailyTarget -> semantic.ok
+        else -> MaterialTheme.colorScheme.primary
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(top = 6.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = eval.labelAr + if (eval.hasDataToday) "" else " (مفيش بيانات)",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                text = valueText,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = if (eval.status == MicronutrientStatus.TOXICITY_WARNING) FontWeight.Bold else FontWeight.Normal,
+                color = if (eval.status == MicronutrientStatus.TOXICITY_WARNING) semantic.low else MaterialTheme.colorScheme.onSurface
+            )
+        }
+        Spacer(Modifier.height(3.dp))
+        MetricProgressBar(
+            current = eval.todayIntake,
+            target = eval.dailyTarget.coerceAtLeast(1.0),
+            barColor = barColor
+        )
+
+        // Show food_source vs supplement_source distinction for supplement-UL nutrients (e.g., Magnesium 350 mg/day)
+        if (eval.ulAppliesToSupplementsOnly && eval.dailyUl != null &&
+            (eval.supplementSource > 0.0 || eval.todayIntake >= eval.dailyUl)
+        ) {
+            val suppNoteColor = when (eval.status) {
+                MicronutrientStatus.TOXICITY_WARNING -> semantic.low
+                MicronutrientStatus.APPROACHING_UL -> semantic.warn
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            val suppNote = buildString {
+                append("أكل: ${fmtMicro(eval.foodSource, unit)} $unit · مكملات: ${fmtMicro(eval.supplementSource, unit)} / حد المكملات ${fmtMicro(eval.dailyUl, unit)} $unit")
+                if (eval.status == MicronutrientStatus.TOXICITY_WARNING) {
+                    append(" — تجاوز حد المكملات اليومي")
+                } else if (eval.todayIntake >= eval.dailyUl && eval.supplementSource < eval.dailyUl * 0.85) {
+                    append(" (مصادر الأكل الطبيعي آمنة)")
+                }
+            }
+            Text(
+                text = suppNote,
+                style = MaterialTheme.typography.labelSmall,
+                color = suppNoteColor,
+                fontWeight = if (eval.status == MicronutrientStatus.TOXICITY_WARNING || eval.status == MicronutrientStatus.APPROACHING_UL) {
+                    FontWeight.SemiBold
+                } else {
+                    FontWeight.Normal
+                },
+                modifier = Modifier.padding(top = 2.dp)
+            )
+        } else if (!eval.isLimitKey && eval.hasDataToday && eval.remainingToday > 0.0 && eval.dailyPercentage < 100.0) {
+            Text(
+                text = "المتبقي اليوم: ${fmtMicro(eval.remainingToday, unit)} $unit",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 1.dp)
+            )
+        }
+    }
+}
+
+private fun fmtMicro(value: Double, unit: String): String {
+    if (unit == "IU" || value >= 100.0 || value % 1.0 == 0.0) {
+        return value.roundToInt().toString()
+    }
+    val rounded = (value * 10.0).roundToInt() / 10.0
+    return if (rounded % 1.0 == 0.0) rounded.roundToInt().toString() else rounded.toString()
+}
