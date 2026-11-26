@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Science
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarBorder
 import androidx.compose.material3.Button
@@ -69,14 +70,21 @@ import androidx.compose.ui.unit.dp
 import com.mutabei.workout.R
 import com.mutabei.workout.data.model.AiFoodReviewItem
 import com.mutabei.workout.data.model.AiLabelResult
+import com.mutabei.workout.data.model.CookingMethodEngine
+import com.mutabei.workout.data.model.CookingMethodPreset
+import com.mutabei.workout.data.model.CookingYieldEngine
 import com.mutabei.workout.data.model.CustomFood
 import com.mutabei.workout.data.model.FoodItem
 import com.mutabei.workout.data.model.NutritionConstants
 import com.mutabei.workout.data.model.PortionOption
 import com.mutabei.workout.data.model.RecipeIngredient
 import com.mutabei.workout.data.model.SupplementCatalog
+import com.mutabei.workout.ui.components.AiMealShimmerSkeleton
 import com.mutabei.workout.ui.components.CameraOrGalleryButtons
+import com.mutabei.workout.ui.components.CookingMethodChipsRow
 import com.mutabei.workout.ui.components.ExpandableSectionCard
+import com.mutabei.workout.ui.components.IngredientAuditResultCard
+import com.mutabei.workout.ui.components.RawCookedToggleBar
 import com.mutabei.workout.ui.theme.LocalSemanticColors
 import com.mutabei.workout.ui.util.rememberImageCaptureController
 import com.mutabei.workout.ui.viewmodel.AppDataSnapshot
@@ -89,6 +97,7 @@ private enum class FoodSheetMode(val label: String) {
     SUPPLEMENTS("مكملات وفيتامينات"),
     FAVORITES("مفضلة"),
     LABEL("ملصق / علبة"),
+    CLEAN_SCANNER("فحص المكونات 🔍"),
     MEAL_PHOTO("صورة أكل"),
     TEXT_AI("وصف / صوت"),
     BARCODE("باركود"),
@@ -132,6 +141,7 @@ fun AddFoodSheet(
         onBitmapCaptured = { bitmap ->
             when (mode) {
                 FoodSheetMode.LABEL -> viewModel.analyzeNutritionLabel(bitmap)
+                FoodSheetMode.CLEAN_SCANNER -> viewModel.analyzeIngredientsQuality(bitmap)
                 FoodSheetMode.SUPPLEMENTS -> {
                     mode = FoodSheetMode.LABEL
                     viewModel.analyzeNutritionLabel(bitmap)
@@ -204,7 +214,7 @@ fun AddFoodSheet(
                             selected = mode == m,
                             onClick = {
                                 mode = m
-                                if (m != FoodSheetMode.LABEL && m != FoodSheetMode.BARCODE) {
+                                if (m != FoodSheetMode.LABEL && m != FoodSheetMode.BARCODE && m != FoodSheetMode.CLEAN_SCANNER) {
                                     viewModel.clearFoodSheetAi()
                                 }
                             },
@@ -214,26 +224,9 @@ fun AddFoodSheet(
                     }
                 }
 
-                // AI Loading indicator
+                // Optimistic Shimmer Skeleton with rotating nutrition science tips during AI analysis
                 if (!aiState.busyMessage.isNullOrBlank()) {
-                    Surface(
-                        shape = MaterialTheme.shapes.small,
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                            Text(
-                                text = aiState.busyMessage,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
-                    }
+                    AiMealShimmerSkeleton(statusMessage = aiState.busyMessage)
                 }
 
                 // AI Status / Error message
@@ -434,6 +427,16 @@ fun AddFoodSheet(
                             onCameraClick = imageCapture.launchCamera,
                             onGalleryClick = imageCapture.launchGallery
                         )
+                        OutlinedButton(
+                            onClick = { mode = FoodSheetMode.CLEAN_SCANNER },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("switch_to_clean_scanner_button")
+                        ) {
+                            Icon(Icons.Rounded.Science, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("🔍 افحص جودة المكونات والإضافات (Clean Score /10)")
+                        }
                         LabelAutoFillForm(
                             initial = aiState.labelDraft,
                             defaultBarcode = aiState.barcodeInput,
@@ -444,6 +447,54 @@ fun AddFoodSheet(
                                 }
                             }
                         )
+                    }
+
+                    FoodSheetMode.CLEAN_SCANNER -> {
+                        Surface(
+                            shape = MaterialTheme.shapes.medium,
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Science,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Text(
+                                        text = "ماسح المكونات الذكي (مهندس جودة الأغذية)",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                                Text(
+                                    text = "صوّر ظهر أي منتج في السوبر ماركت (قائمة المكونات Ingredients). هيحلّلها الذكاء الاصطناعي ويكشف الدهون المهدرجة، السكر الخفي (مالتوديكسترين/شراب ذرة)، الصوديوم العالي، والمواد الحافظة — ويديك Clean Score من 10 + بديل أنضف.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        CameraOrGalleryButtons(
+                            cameraLabel = "صوّر قائمة المكونات",
+                            galleryLabel = "صورة المكونات",
+                            enabled = aiState.busyMessage == null,
+                            cameraTestTag = "clean_scanner_camera_button",
+                            galleryTestTag = "clean_scanner_gallery_button",
+                            onCameraClick = imageCapture.launchCamera,
+                            onGalleryClick = imageCapture.launchGallery
+                        )
+                        aiState.ingredientAudit?.let { audit ->
+                            IngredientAuditResultCard(result = audit)
+                        }
                     }
 
                     FoodSheetMode.MEAL_PHOTO -> {
@@ -465,6 +516,9 @@ fun AddFoodSheet(
                                 items = aiState.detectedItems,
                                 onUpdate = { id, sel, g, candIdx ->
                                     viewModel.updateAiDetectedItem(id, sel, g, candIdx)
+                                },
+                                onSelectCookingMethod = { id, method ->
+                                    viewModel.updateAiCookingMethod(id, method)
                                 },
                                 onConfirmAdd = {
                                     viewModel.addMultipleAiFoods(aiState.detectedItems, mealIndex)
@@ -534,6 +588,9 @@ fun AddFoodSheet(
                                 items = aiState.detectedItems,
                                 onUpdate = { id, sel, g, candIdx ->
                                     viewModel.updateAiDetectedItem(id, sel, g, candIdx)
+                                },
+                                onSelectCookingMethod = { id, method ->
+                                    viewModel.updateAiCookingMethod(id, method)
                                 },
                                 onConfirmAdd = {
                                     viewModel.addMultipleAiFoods(aiState.detectedItems, mealIndex)
@@ -707,6 +764,14 @@ private fun FoodSelectionDetailView(
     onBack: () -> Unit
 ) {
     val isUnitSupp = remember(food) { SupplementCatalog.isUnitBasedFood(food) }
+    val yieldProfile = remember(food, isUnitSupp) {
+        if (isUnitSupp) null else CookingYieldEngine.detectProfile(food.name, food.englishName)
+    }
+    val itemIntrinsicMode = remember(food, yieldProfile) {
+        CookingYieldEngine.detectItemIntrinsicState(food.name, food.englishName, food.nutrients.getOrNull(0) ?: -1.0)
+    }
+    var weighedMode by remember(food, itemIntrinsicMode) { mutableStateOf(itemIntrinsicMode) }
+
     val defaultG = food.portions.firstOrNull()?.grams ?: 100.0
     var inputText by remember(food) {
         val initialVal = if (isUnitSupp) defaultG / 100.0 else defaultG
@@ -726,7 +791,10 @@ private fun FoodSelectionDetailView(
     val isFav = snapshot.customFoods.any { it.favorite && it.name == food.name && it.source == food.source }
     val parsedInput = inputText.replace(',', '.').toDoubleOrNull() ?: 0.0
     val rawGrams = if (isUnitSupp) parsedInput * 100.0 else parsedInput
-    val effectiveGrams = rawGrams * if (deductRefuse && food.refusePercent > 0.0) (1.0 - food.refusePercent / 100.0) else 1.0
+    val yieldAdjustedGrams = if (yieldProfile != null && !isUnitSupp) {
+        CookingYieldEngine.convertToDbGrams(rawGrams, weighedMode, itemIntrinsicMode, yieldProfile.yieldFactor)
+    } else rawGrams
+    val effectiveGrams = yieldAdjustedGrams * if (deductRefuse && food.refusePercent > 0.0) (1.0 - food.refusePercent / 100.0) else 1.0
 
     fun calc(key: String): String {
         val idx = NutritionConstants.NUTRIENT_INDEX[key] ?: return "–"
@@ -763,6 +831,15 @@ private fun FoodSelectionDetailView(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth().testTag("selected_food_grams_input")
         )
+        if (yieldProfile != null && !isUnitSupp) {
+            RawCookedToggleBar(
+                profile = yieldProfile,
+                itemIntrinsicMode = itemIntrinsicMode,
+                selectedWeighedMode = weighedMode,
+                enteredGrams = rawGrams,
+                onModeChange = { weighedMode = it }
+            )
+        }
         if (food.refusePercent > 0.0) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(checked = deductRefuse, onCheckedChange = { deductRefuse = it })
@@ -855,11 +932,12 @@ private fun FoodSelectionDetailView(
 private fun AiDetectedItemsReview(
     items: List<AiFoodReviewItem>,
     onUpdate: (String, Boolean?, Double?, Int?) -> Unit,
+    onSelectCookingMethod: (String, CookingMethodPreset) -> Unit,
     onConfirmAdd: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
-            text = "Gemini حلّل الأصناف بكل الفيتامينات والمعادن (USDA + الجدول المصري). تقدر تعدّل الجرامات أو تختار صنف من الجدول:",
+            text = "Gemini حلّل الأصناف بكل الفيتامينات والمعادن (USDA + الجدول المصري). تقدر تعدّل طريقة التسوية أو الجرامات:",
             style = MaterialTheme.typography.bodySmall,
             color = LocalSemanticColors.current.warn,
             fontWeight = FontWeight.SemiBold
@@ -875,6 +953,7 @@ private fun AiDetectedItemsReview(
             }
             val kcal = amt("kcal").coerceAtLeast(0.0).roundToInt()
             val pro = amt("p").coerceAtLeast(0.0).roundToInt()
+            val fat = amt("f").coerceAtLeast(0.0).roundToInt()
             val populatedCount = activeVec.count { it >= 0.0 }
             val detailPreview = buildList {
                 amt("leu").takeIf { it >= 0.0 }?.let { add("ليوسين ${(it * 10).roundToInt() / 10.0}جم") }
@@ -882,6 +961,9 @@ private fun AiDetectedItemsReview(
                 amt("vD").takeIf { it >= 0.0 }?.let { add("فيتامين D ${(it * 40.0).roundToInt()} IU") }
                 amt("wat").takeIf { it > 0.0 }?.let { add("ماء ${it.roundToInt()}مل") }
             }.joinToString(" · ")
+            val showCookingChips = remember(item.detectedName) {
+                CookingMethodEngine.shouldShowCookingChips(item.detectedName)
+            }
 
             Surface(
                 shape = MaterialTheme.shapes.small,
@@ -895,14 +977,21 @@ private fun AiDetectedItemsReview(
                             checked = item.selected,
                             onCheckedChange = { onUpdate(item.id, it, null, null) }
                         )
-                        Text(item.detectedName, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                        Text("$kcal سعر · $pro جم بروتين", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                        Text(item.activeName(), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                        Text("$kcal سعر · ب $pro · د $fat", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                     }
                     if (populatedCount >= 10) {
                         Text(
                             text = "تحليل كامل ($populatedCount عنصر)" + if (detailPreview.isNotBlank()) " · $detailPreview" else "",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (showCookingChips) {
+                        CookingMethodChipsRow(
+                            selectedMethod = item.selectedCookingMethod,
+                            baselineMethod = item.baselineCookingMethod,
+                            onSelectMethod = { preset -> onSelectCookingMethod(item.id, preset) }
                         )
                     }
                     Row(

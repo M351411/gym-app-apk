@@ -269,6 +269,19 @@ fun SupplementSynergyCard(
                 )
             )
         }
+        val hasMineralSupps = suppItems.any {
+            it.nutrientAmount("fe") >= 3.0 || it.nutrientAmount("zn") >= 3.0 ||
+                it.nutrientAmount("ca") >= 100.0 || it.nutrientAmount("mg") >= 40.0
+        }
+        if (caf >= 50.0 && (hasMineralSupps || fe >= 8.0 || zn >= 6.0)) {
+            out.add(
+                Triple(
+                    true,
+                    "افصل الكافيين عن المعادن (حديد / زنك / كالسيوم)",
+                    "الكافيين والتانينات في القهوة والشاي بيقللوا امتصاص الحديد والزنك والمعادن بنسبة تصل لـ 40% — افصل بينهم بـ 1–2 ساعة على الأقل."
+                )
+            )
+        }
         if ((mgEval?.supplementSource ?: 0.0) >= 50.0 || suppItems.any { it.nutrientAmount("mg") >= 50.0 } || mg >= 350.0) {
             out.add(
                 Triple(

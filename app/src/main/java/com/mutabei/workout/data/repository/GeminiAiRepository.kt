@@ -30,6 +30,9 @@ import com.mutabei.workout.data.model.CoachChatMessage
 import com.mutabei.workout.data.model.CoachChatReply
 import com.mutabei.workout.data.model.CoachSuggestedFood
 import com.mutabei.workout.data.model.CoachSuggestedTargets
+import com.mutabei.workout.data.model.FoodIngredientAuditResult
+import com.mutabei.workout.data.model.IngredientAuditFlag
+import com.mutabei.workout.data.model.IngredientFlagSeverity
 import com.mutabei.workout.data.model.NutritionConstants
 import com.mutabei.workout.data.model.PreWorkoutGamePlan
 import com.mutabei.workout.data.model.PreWorkoutTargetExercise
@@ -554,6 +557,51 @@ class GeminiAiRepository {
             primary = buildModel(FALLBACK_MODEL_NAME, macroTetrisSchema, 0.3f, thinking = null),
             fallbackName = PRIMARY_MODEL_NAME,
             fallback = buildModel(PRIMARY_MODEL_NAME, macroTetrisSchema, 0.3f, thinking = null)
+        )
+    }
+
+    private val ingredientAuditSchema: Schema by lazy {
+        val flagSchema = Schema.obj(
+            properties = mapOf(
+                "category_ar" to Schema.string(description = "Arabic category e.g. دهون مهدرجة / سكر خفي / صوديوم عالي / مواد حافظة / إضافات صناعية / مكوّن نظيف"),
+                "ingredient_name" to Schema.string(description = "Exact ingredient name or E-number read from the package"),
+                "severity" to Schema.enumeration(
+                    values = listOf("HIGH_RISK", "MODERATE", "CLEAN"),
+                    description = "Risk level of this ingredient from a food processing engineering standpoint"
+                ),
+                "explanation_ar" to Schema.string(description = "Short, clear Arabic explanation as a Food Processing & Quality Control Engineer")
+            )
+        )
+        Schema.obj(
+            properties = mapOf(
+                "product_name_ar" to Schema.string(description = "Product name in Arabic if visible, or short generic product description"),
+                "clean_score" to Schema.integer(description = "Overall clean eating & food-tech quality score from 0 (ultra-processed/harmful) to 10 (whole/clean)"),
+                "clean_grade_ar" to Schema.string(description = "Short Arabic verdict e.g. ممتاز ونظيف / مقبول باعتدال / مصنّع جدًا — يُفضّل تجنّبه"),
+                "nova_group" to Schema.integer(description = "NOVA food processing classification group: 1 (unprocessed/minimally), 2 (culinary ingredients), 3 (processed), 4 (ultra-processed)"),
+                "has_hydrogenated_fats" to Schema.boolean(description = "True if partially/fully hydrogenated oils, trans fats, margarine, shortening, or refined palm oil are present"),
+                "has_hidden_sugars" to Schema.boolean(description = "True if maltodextrin, HFCS, glucose/fructose syrup, dextrose, invert sugar, corn syrup, or added sugars are present"),
+                "has_high_sodium" to Schema.boolean(description = "True if sodium is high (>= 400 mg per 100g/serving) or MSG/sodium nitrite/excess salt is prominent"),
+                "has_preservatives_or_additives" to Schema.boolean(description = "True if synthetic preservatives, artificial colors/flavors, emulsifiers, E-numbers (e.g., E211, E250, E320, E621, E471), or stabilizers are present"),
+                "summary_ar" to Schema.string(description = "2-sentence Egyptian Arabic executive verdict from a Food Quality Engineer"),
+                "flags" to Schema.array(
+                    items = flagSchema,
+                    description = "Itemized list of notable red flags, moderate ingredients, and clean highlights read from the label"
+                ),
+                "detected_ingredients_ar" to Schema.array(
+                    items = Schema.string(),
+                    description = "Key ingredients read from the package in Arabic/original terms"
+                ),
+                "cleaner_alternative_ar" to Schema.string(description = "Practical cleaner supermarket alternative available in Egypt")
+            )
+        )
+    }
+
+    private val ingredientAuditModels by lazy {
+        ModelPair(
+            primaryName = PRIMARY_MODEL_NAME,
+            primary = buildModel(PRIMARY_MODEL_NAME, ingredientAuditSchema, 0.15f, thinking = null),
+            fallbackName = FALLBACK_MODEL_NAME,
+            fallback = buildModel(FALLBACK_MODEL_NAME, ingredientAuditSchema, 0.15f, thinking = null)
         )
     }
 
@@ -1172,6 +1220,88 @@ class GeminiAiRepository {
         return out
     }
 
+    suspend fun auditIngredientsLabel(
+        bitmap: Bitmap,
+        onProgress: (String) -> Unit = {}
+    ): Result<FoodIngredientAuditResult> = runAiCall {
+        val prompt = """
+            أنت مهندس جودة وتكنولوجيا أغذية (Food Processing & Quality Control Engineer) متخصص في فحص ملصقات منتجات السوبر ماركت في مصر والشرق الأوسط.
+            المستخدم صوّر ظهر عبوة منتج غذائي (قائمة المكونات Ingredients والجدول الغذائي إن وُجد).
+            افحص الصورة بدقة عالية جدًا (سواء كانت بالعربي أو الإنجليزي) وقيّمها هندسيًا وغذائيًا:
+            1. دهون مهدرجة وزيوت مكررة (has_hydrogenated_fats): مثل زيوت نباتية مهدرجة / مهدرجة جزئيًا، سمن نباتي، زيت نخيل مكرر، شورتنج، دهون متحولة.
+            2. سكر خفي (has_hidden_sugars): مثل مالتوديكسترين (Maltodextrin)، شراب ذرة عالي الفركتوز (HFCS)، شراب جلوكوز، دكستروز، سكر محوّل، عصير قصب مركز، مالتوز، أو سكر في أول 3 مكونات.
+            3. صوديوم عالي (has_high_sodium): إذا كان الصوديوم في الجدول ≥ 400 ملجم لكل 100 جم/حصة أو ملح ظاهر مبكرًا أو MSG (E621) / نيتريت صوديوم (E250).
+            4. مواد حافظة وإضافات صناعية (has_preservatives_or_additives): مثل بنزوات الصوديوم (E211)، سوربات البوتاسيوم (E202)، BHA/BHT (E320/E321)، مستحلبات صناعية (E471/E476)، ألوان ونكهات صناعية، محليات صناعية (أسبارتام/أسيسولفام).
+            5. احسب Clean Score من 0 إلى 10:
+               - 9–10: مكونات طبيعية كاملة قليلة جدًا بدون إضافات (NOVA 1).
+               - 7–8: منتج نظيف مع تصنيع بسيط مقبول (NOVA 2–3).
+               - 4–6: يحتوي على سكر خفي أو صوديوم مرتفع أو إضافات متوسطة (NOVA 3–4).
+               - 0–3: فائق التصنيع (NOVA 4) بدهون مهدرجة أو مواد حافظة مقلقة أو سكريات خفية متعددة.
+            6. اذكر في flags أهم المكوّنات التي قرأتها فعليًا من العبوة فقط (لا تخترع مكونات غير موجودة في الصورة)، واشرح سبب الخطورة أو النظافة بأسلوب مهندس أغذية مبسّط بالمصري.
+            7. اقترح في cleaner_alternative_ar بديلاً أنضف عمليًا وموجودًا في السوبر ماركت المصري.
+        """.trimIndent()
+
+        val rawText = executeMultimodalJson(
+            bitmap = bitmap,
+            prompt = prompt,
+            taskLabel = "فحص جودة المكونات",
+            models = ingredientAuditModels,
+            highDetailJpeg = true,
+            onProgress = onProgress
+        )
+        val json = JSONObject(rawText)
+        val flagsArr = json.optJSONArray("flags")
+        val flags = mutableListOf<IngredientAuditFlag>()
+        if (flagsArr != null) {
+            for (i in 0 until flagsArr.length()) {
+                val f = flagsArr.optJSONObject(i) ?: continue
+                val name = f.optString("ingredient_name", "").trim()
+                val expl = f.optString("explanation_ar", "").trim()
+                if (name.isBlank() && expl.isBlank()) continue
+                val sev = when (f.optString("severity", "MODERATE").trim().uppercase()) {
+                    "HIGH_RISK" -> IngredientFlagSeverity.HIGH_RISK
+                    "CLEAN" -> IngredientFlagSeverity.CLEAN
+                    else -> IngredientFlagSeverity.MODERATE
+                }
+                flags.add(
+                    IngredientAuditFlag(
+                        categoryAr = f.optString("category_ar", "مكوّن").trim(),
+                        ingredientName = name.ifBlank { "مكوّن غير محدد" },
+                        severity = sev,
+                        explanationAr = expl
+                    )
+                )
+            }
+        }
+        val ingArr = json.optJSONArray("detected_ingredients_ar")
+        val detectedIngs = if (ingArr != null) {
+            (0 until ingArr.length()).mapNotNull { idx ->
+                ingArr.optString(idx, "").trim().takeIf { it.isNotBlank() }
+            }
+        } else emptyList()
+
+        val score = json.optInt("clean_score", 5).coerceIn(0, 10)
+        val defaultGrade = when {
+            score >= 8 -> "منتج نظيف وممتاز"
+            score >= 5 -> "مقبول باعتدال"
+            else -> "فائق التصنيع — يُفضّل تجنّبه"
+        }
+        FoodIngredientAuditResult(
+            productNameAr = json.optString("product_name_ar", "منتج غذائي").trim(),
+            cleanScore = score,
+            cleanGradeAr = json.optString("clean_grade_ar", defaultGrade).trim().ifBlank { defaultGrade },
+            novaGroup = json.optInt("nova_group", if (score >= 8) 1 else if (score >= 5) 3 else 4).coerceIn(1, 4),
+            hasHydrogenatedFats = json.optBoolean("has_hydrogenated_fats", false),
+            hasHiddenSugars = json.optBoolean("has_hidden_sugars", false),
+            hasHighSodium = json.optBoolean("has_high_sodium", false),
+            hasPreservativesOrAdditives = json.optBoolean("has_preservatives_or_additives", false),
+            summaryAr = json.optString("summary_ar", "").trim(),
+            flags = flags,
+            detectedIngredientsAr = detectedIngs,
+            cleanerAlternativeAr = json.optString("cleaner_alternative_ar", "").trim()
+        )
+    }
+
     suspend fun suggestMacroTetrisMeals(
         remKcal: Int,
         remProteinG: Int,
@@ -1179,9 +1309,13 @@ class GeminiAiRepository {
         remFatG: Int,
         goal: String,
         favoriteNames: List<String>,
+        fridgeIngredients: List<String> = emptyList(),
         micronutrientEvalJson: String? = null,
         onProgress: (String) -> Unit = {}
     ): Result<AiMacroTetrisResult> = runAiCall {
+        val fridgeBlock = if (fridgeIngredients.isNotEmpty()) {
+            "المكوّنات المتوفرة حاليًا في ثلاجة المستخدم وعاداته اليومية (التزم ببناء الوجبات أساسًا منها قدر الإمكان): ${fridgeIngredients.take(18).joinToString("، ")}."
+        } else ""
         val favHint = if (favoriteNames.isNotEmpty()) {
             "أكلات المستخدم المفضلة (يمكنك استخدام بعضها لو مناسب): ${favoriteNames.take(10).joinToString("، ")}."
         } else ""
@@ -1189,17 +1323,19 @@ class GeminiAiRepository {
             "\nحالة الميكروز الحالية (7-Day Rolling Pool للفيتامينات A/D3/E/K + اليومي لباقي العناصر):\n$micronutrientEvalJson\n"
         } else ""
         val prompt = """
-            أنت مهندس تغذية رياضية في مصر.
-            المستخدم محتاج يقفل باقي احتياجه اليومي بالظبط:
+            أنت مهندس تغذية رياضية في مصر وتعمل كـ "حاسبة باقي اليوم الذكية" (Reverse Meal Builder).
+            المستخدم بيسألك: "فاضلي $remKcal سعر و $remProteinG جم بروتين — آكل إيه من اللي عندي؟"
+            المتبقي الدقيق لتقفيل دائرة اليوم 100%:
             - السعرات المتبقية: $remKcal سعر
             - البروتين المتبقي: $remProteinG جم
             - الكارب المتبقي: $remCarbsG جم
             - الدهون المتبقية: $remFatG جم
             - الهدف: $goal
+            $fridgeBlock
             $favHint
             $evalBlock
             $MICRONUTRIENT_BEHAVIOR_RULES
-            صمّم 2 إلى 3 اختيارات وجبات أو سناكس مصرية عملية وسريعة التحضير (مثل: جبنة قريش، بيض، تونة مصفاة، صدور فراخ، زبادي يوناني، شوفان، بطاطا، رز، عيش بلدي، موز، فول، واي بروتين) بحيث كل اختيار يقرب جدًا من السعرات والماكروز المتبقية ويوصل لـ ≥ 2.5 جم ليوسين لو البروتين المتبقي ≥ 25 جم، مع مراعاة قواعد الميكروز أعلاه.
+            صمّم 2 إلى 3 اختيارات وجبات أو سناكس مصرية عملية وسريعة التحضير بالاعتماد المباشر على مكونات ثلاجة المستخدم وعاداته المذكورة أعلاه، بحيث كل اختيار يقفّل السعرات والماكروز المتبقية بنسبة ~95–100% بالجرامات الدقيقة ويوصل لـ ≥ 2.5 جم ليوسين لو البروتين المتبقي ≥ 25 جم، مع مراعاة قواعد الميكروز أعلاه.
             اكتب الجرامات الدقيقة لكل مكون بالعربي.
         """.trimIndent()
 

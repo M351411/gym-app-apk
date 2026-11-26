@@ -18,10 +18,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -36,6 +40,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -54,13 +59,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.mutabei.workout.R
+import com.mutabei.workout.data.model.CookingYieldEngine
+import com.mutabei.workout.data.model.FoodItem
 import com.mutabei.workout.data.model.LoggedFoodItem
+import com.mutabei.workout.data.model.MacroSwapperEngine
 import com.mutabei.workout.data.model.MicronutrientEngine
 import com.mutabei.workout.data.model.MicronutrientStatus
 import com.mutabei.workout.data.model.NutritionConstants
 import com.mutabei.workout.data.model.NutritionDay
 import com.mutabei.workout.data.model.NutritionTargets
+import com.mutabei.workout.data.model.ReverseMealBuilderEngine
+import com.mutabei.workout.data.model.RollingCalorieBudgetEngine
 import com.mutabei.workout.data.model.SupplementCatalog
+import com.mutabei.workout.data.model.WorkoutSyncedNutritionEngine
 import com.mutabei.workout.data.model.daysBetweenIso
 import com.mutabei.workout.data.model.shiftIsoDate
 import com.mutabei.workout.data.model.todayIso
@@ -71,10 +82,13 @@ import com.mutabei.workout.ui.components.DailyNutrientRow
 import com.mutabei.workout.ui.components.ExpandableSectionCard
 import com.mutabei.workout.ui.components.FatSolubleDualIndicatorCard
 import com.mutabei.workout.ui.components.FoodBattleDialog
-import com.mutabei.workout.ui.components.MacroTetrisCard
+import com.mutabei.workout.ui.components.MacroSwapperPanel
 import com.mutabei.workout.ui.components.MealLeucineMpsChip
 import com.mutabei.workout.ui.components.MetricProgressBar
+import com.mutabei.workout.ui.components.RawCookedToggleBar
+import com.mutabei.workout.ui.components.ReverseMealBuilderCard
 import com.mutabei.workout.ui.components.SaveMealPresetDialog
+import com.mutabei.workout.ui.components.SmartNutritionStatusStrip
 import com.mutabei.workout.ui.components.SupplementSynergyCard
 import com.mutabei.workout.ui.components.computeAdaptiveTdee
 import com.mutabei.workout.ui.components.computeMealLeucineStatus
@@ -106,6 +120,33 @@ fun NutritionScreen(
     val targets = remember(snapshot.config, snapshot.bodyRecords) {
         viewModel.computeTargets(snapshot.config, snapshot.bodyRecords)
     }
+    val rollingBudgetEnabled by viewModel.rollingCalorieBudgetEnabled.collectAsStateWithLifecycle()
+    val workoutSyncedEnabled by viewModel.workoutSyncedNutritionEnabled.collectAsStateWithLifecycle()
+
+    val rollingBudget = remember(selectedDate, targets, snapshot.nutritionDays, rollingBudgetEnabled) {
+        if (targets != null && rollingBudgetEnabled) {
+            RollingCalorieBudgetEngine.evaluate(selectedDate, targets.kcal, snapshot.nutritionDays)
+        } else null
+    }
+    val effectiveKcalTarget = rollingBudget?.adjustedTodayTarget ?: targets?.kcal ?: 0
+    val workoutSync = remember(selectedDate, targets, effectiveKcalTarget, snapshot.config, snapshot.sessions, workoutSyncedEnabled) {
+        if (targets != null && workoutSyncedEnabled) {
+            WorkoutSyncedNutritionEngine.evaluate(
+                referenceDate = selectedDate,
+                baseTargets = targets,
+                effectiveKcal = effectiveKcalTarget,
+                config = snapshot.config,
+                sessions = snapshot.sessions.values.toList()
+            )
+        } else null
+    }
+    val effectiveTargets = remember(targets, effectiveKcalTarget, workoutSync) {
+        targets?.copy(
+            kcal = effectiveKcalTarget,
+            carbsG = workoutSync?.carbsG ?: targets.carbsG,
+            fatG = workoutSync?.fatG ?: targets.fatG
+        )
+    }
 
     val vitDBreakdown = remember(selectedDate, snapshot.nutritionDays) {
         NutritionConstants.computeVitaminDBreakdown(selectedDate, snapshot.nutritionDays)
@@ -116,6 +157,13 @@ fun NutritionScreen(
             referenceDate = selectedDate,
             nutritionDays = snapshot.nutritionDays,
             sex = snapshot.config.sex
+        )
+    }
+
+    val fridgePool = remember(snapshot.nutritionDays, snapshot.customFoods) {
+        ReverseMealBuilderEngine.extractHabitAndFridgePool(
+            nutritionDays = snapshot.nutritionDays,
+            customFoods = snapshot.customFoods
         )
     }
 
@@ -218,8 +266,9 @@ fun NutritionScreen(
                         }
 
                         val kcal = totalOf("kcal")
-                        if (targets != null) {
-                            val rem = targets.kcal - kcal
+                        if (effectiveTargets != null) {
+                            val rem = effectiveTargets.kcal - kcal
+                            val overColor = if (rollingBudgetEnabled) semantic.warn else semantic.low
                             Row(
                                 verticalAlignment = Alignment.Bottom,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -228,10 +277,10 @@ fun NutritionScreen(
                                 Text(
                                     text = "${abs(rem).roundToInt()}",
                                     style = MaterialTheme.typography.displaySmall,
-                                    color = if (rem < 0) semantic.low else MaterialTheme.colorScheme.onSurface
+                                    color = if (rem < 0) overColor else MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    text = "سعر ${if (rem >= 0) "فاضلين" else "زيادة"} من ${targets.kcal}",
+                                    text = "سعر ${if (rem >= 0) "فاضلين" else "زيادة"} من ${effectiveTargets.kcal}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(bottom = 6.dp)
@@ -239,14 +288,14 @@ fun NutritionScreen(
                             }
                             MetricProgressBar(
                                 current = kcal,
-                                target = targets.kcal.toDouble(),
-                                barColor = if (rem < 0) semantic.low else MaterialTheme.colorScheme.primary
+                                target = effectiveTargets.kcal.toDouble(),
+                                barColor = if (rem < 0) overColor else MaterialTheme.colorScheme.primary
                             )
                             Spacer(Modifier.height(10.dp))
                             listOf(
-                                Triple("p", "بروتين", targets.proteinG),
-                                Triple("c", "كارب", targets.carbsG),
-                                Triple("f", "دهون", targets.fatG)
+                                Triple("p", "بروتين", effectiveTargets.proteinG),
+                                Triple("c", "كارب", effectiveTargets.carbsG),
+                                Triple("f", "دهون", effectiveTargets.fatG)
                             ).forEach { (k, label, goalG) ->
                                 val cur = totalOf(k)
                                 Row(
@@ -258,6 +307,13 @@ fun NutritionScreen(
                                 }
                                 Spacer(Modifier.height(3.dp))
                                 MetricProgressBar(current = cur, target = goalG.coerceAtLeast(1).toDouble())
+                            }
+                            if (workoutSync != null || rollingBudget != null) {
+                                Spacer(Modifier.height(10.dp))
+                                SmartNutritionStatusStrip(
+                                    workoutSync = workoutSync,
+                                    rollingBudget = rollingBudget
+                                )
                             }
                         } else {
                             Text(
@@ -505,22 +561,28 @@ fun NutritionScreen(
                 }
             }
 
-            // Macro Tetris AI (fill remaining daily macros)
-            if (targets != null) {
+            // V3 Smart Reverse Meal Builder ("فاضلي X سعر و Y بروتين — آكل إيه من اللي عندي؟")
+            if (effectiveTargets != null) {
                 item(key = "macro_tetris") {
-                    val remKcal = (targets.kcal - totalOf("kcal")).roundToInt().coerceAtLeast(0)
-                    val remP = (targets.proteinG - totalOf("p")).roundToInt().coerceAtLeast(0)
-                    val remC = (targets.carbsG - totalOf("c")).roundToInt().coerceAtLeast(0)
-                    val remF = (targets.fatG - totalOf("f")).roundToInt().coerceAtLeast(0)
-                    MacroTetrisCard(
+                    val remKcal = (effectiveTargets.kcal - totalOf("kcal")).roundToInt().coerceAtLeast(0)
+                    val remP = (effectiveTargets.proteinG - totalOf("p")).roundToInt().coerceAtLeast(0)
+                    val remC = (effectiveTargets.carbsG - totalOf("c")).roundToInt().coerceAtLeast(0)
+                    val remF = (effectiveTargets.fatG - totalOf("f")).roundToInt().coerceAtLeast(0)
+                    ReverseMealBuilderCard(
                         remKcal = remKcal,
                         remProteinG = remP,
                         remCarbsG = remC,
                         remFatG = remF,
+                        fridgePool = fridgePool,
                         busyMessage = macroTetrisAi.busyMessage,
                         errorMessage = macroTetrisAi.errorMessage,
-                        result = macroTetrisAi.result,
-                        onGenerate = { viewModel.requestMacroTetris(remKcal, remP, remC, remF) }
+                        aiResult = macroTetrisAi.result,
+                        onGenerateAi = { fridgeNames ->
+                            viewModel.requestMacroTetris(remKcal, remP, remC, remF, fridgeNames)
+                        },
+                        onLogInstantMeal = { builtItems ->
+                            viewModel.logReverseMealPlan(builtItems)
+                        }
                     )
                 }
             }
@@ -778,13 +840,17 @@ fun NutritionScreen(
         )
     }
 
-    // Edit Logged Food Dialog (with live calorie & macro preview!)
+    // Edit Logged Food Dialog (with live calorie & macro preview, Raw/Cooked toggle, and Smart Macro-Swapper!)
     if (editingItem != null) {
         EditLoggedFoodDialog(
             item = editingItem!!,
             onDismiss = { editingItem = null },
             onSave = { grams, mealIdx ->
                 viewModel.updateLoggedFood(editingItem!!.id, grams, mealIdx)
+                editingItem = null
+            },
+            onSwapFood = { replacementFood, newGrams, mealIdx ->
+                viewModel.replaceLoggedFood(editingItem!!.id, replacementFood, newGrams, mealIdx)
                 editingItem = null
             },
             onDelete = {
@@ -801,23 +867,45 @@ private fun EditLoggedFoodDialog(
     item: LoggedFoodItem,
     onDismiss: () -> Unit,
     onSave: (Double, Int) -> Unit,
+    onSwapFood: (FoodItem, Double, Int) -> Unit,
     onDelete: () -> Unit
 ) {
     val isUnitSupp = remember(item) { SupplementCatalog.isUnitBasedLoggedItem(item) }
+    val yieldProfile = remember(item, isUnitSupp) {
+        if (isUnitSupp) null else CookingYieldEngine.detectProfile(item.name)
+    }
+    val itemIntrinsicMode = remember(item, yieldProfile) {
+        CookingYieldEngine.detectItemIntrinsicState(item.name, kcalPer100 = item.nutrients.getOrNull(0) ?: -1.0)
+    }
+    var weighedMode by remember(item, itemIntrinsicMode) { mutableStateOf(itemIntrinsicMode) }
+    var showSwapper by remember(item) { mutableStateOf(false) }
+
     var amountText by remember(item) {
         val initial = if (isUnitSupp) item.grams / 100.0 else item.grams
         mutableStateOf(if (initial % 1.0 == 0.0) initial.toInt().toString() else initial.toString())
     }
     var mealIdx by remember(item) { mutableIntStateOf(item.mealIndex) }
     val rawVal = amountText.replace(',', '.').toDoubleOrNull() ?: 0.0
-    val gVal = if (isUnitSupp) rawVal * 100.0 else rawVal
+    val enteredGrams = if (isUnitSupp) rawVal * 100.0 else rawVal
+    val gVal = if (yieldProfile != null && !isUnitSupp) {
+        CookingYieldEngine.convertToDbGrams(enteredGrams, weighedMode, itemIntrinsicMode, yieldProfile.yieldFactor)
+    } else enteredGrams
     val previewItem = item.copy(grams = gVal)
+    val swapOptions = remember(previewItem, showSwapper, isUnitSupp) {
+        if (showSwapper && !isUnitSupp) MacroSwapperEngine.generateSwaps(previewItem) else emptyList()
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(item.name, style = MaterialTheme.typography.titleMedium) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 460.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 OutlinedTextField(
                     value = amountText,
                     onValueChange = { amountText = it },
@@ -826,6 +914,15 @@ private fun EditLoggedFoodDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth().testTag("edit_food_grams_input")
                 )
+                if (yieldProfile != null && !isUnitSupp) {
+                    RawCookedToggleBar(
+                        profile = yieldProfile,
+                        itemIntrinsicMode = itemIntrinsicMode,
+                        selectedWeighedMode = weighedMode,
+                        enteredGrams = enteredGrams,
+                        onModeChange = { weighedMode = it }
+                    )
+                }
                 val microLine = if (isUnitSupp) {
                     SupplementCatalog.activeNutrientsSummary(previewItem.nutrients, gVal, maxItems = 4)
                 } else ""
@@ -839,6 +936,26 @@ private fun EditLoggedFoodDialog(
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold
                 )
+                if (!isUnitSupp) {
+                    OutlinedButton(
+                        onClick = { showSwapper = !showSwapper },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("toggle_macro_swapper_button")
+                    ) {
+                        Icon(Icons.Rounded.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.size(6.dp))
+                        Text(if (showSwapper) "إخفاء بدائل المكون" else "بدّل المكون بنفس الماكروز (Smart Swap)")
+                    }
+                    if (showSwapper) {
+                        MacroSwapperPanel(
+                            swaps = swapOptions,
+                            onPickSwap = { opt ->
+                                onSwapFood(opt.food, opt.suggestedGrams, mealIdx)
+                            }
+                        )
+                    }
+                }
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -1010,6 +1127,42 @@ private fun NutritionGoalsCard(
             modifier = Modifier.fillMaxWidth().testTag("save_nutrition_goals_button")
         ) {
             Text("احفظ الأهداف")
+        }
+        val rollingEnabled by viewModel.rollingCalorieBudgetEnabled.collectAsStateWithLifecycle()
+        val workoutSynced by viewModel.workoutSyncedNutritionEnabled.collectAsStateWithLifecycle()
+        Spacer(Modifier.height(10.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+        Spacer(Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                Text("مرونة الـ 7 أيام للسعرات (Rolling Budget)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                Text("يوزّع أي زيادة في يوم على باقي الأسبوع بذكاء بدون يوم أحمر.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(
+                checked = rollingEnabled,
+                onCheckedChange = { viewModel.setRollingCalorieBudgetEnabled(it) },
+                modifier = Modifier.testTag("toggle_rolling_budget_switch")
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                Text("ربط الماكروز بالتمرين (Workout-Synced)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                Text("يرفع الكارب أيام الرجل/التمرين العالي ويخفضه أيام الراحة مع رفع الدهون الصحية.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(
+                checked = workoutSynced,
+                onCheckedChange = { viewModel.setWorkoutSyncedNutritionEnabled(it) },
+                modifier = Modifier.testTag("toggle_workout_synced_switch")
+            )
         }
         if (targets != null) {
             if (targets.hint.isNotBlank()) {

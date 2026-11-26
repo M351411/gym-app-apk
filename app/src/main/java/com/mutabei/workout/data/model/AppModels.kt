@@ -767,7 +767,9 @@ data class AiFoodReviewItem(
     val selected: Boolean = true,
     val fallbackVector: List<Double>,
     val candidates: List<FoodItem>,
-    val selectedCandidateIndex: Int // -1 means AI estimate
+    val selectedCandidateIndex: Int, // -1 means AI estimate
+    val baselineCookingMethod: CookingMethodPreset = CookingMethodEngine.inferBaselineMethod(detectedName),
+    val selectedCookingMethod: CookingMethodPreset = baselineCookingMethod
 ) {
     fun activeNutrients(): List<Double> {
         val base = if (selectedCandidateIndex in candidates.indices) {
@@ -775,14 +777,23 @@ data class AiFoodReviewItem(
         } else {
             fallbackVector
         }
-        return List(NutritionConstants.NUTRIENT_COUNT) { idx ->
+        val merged = List(NutritionConstants.NUTRIENT_COUNT) { idx ->
             val primary = base.getOrNull(idx) ?: -1.0
             if (primary >= 0.0) primary else (fallbackVector.getOrNull(idx) ?: -1.0)
         }
+        return CookingMethodEngine.applyMethodDelta(
+            basePer100 = merged,
+            baseline = baselineCookingMethod,
+            selected = selectedCookingMethod
+        )
     }
 
-    fun activeName(): String =
-        if (selectedCandidateIndex in candidates.indices) candidates[selectedCandidateIndex].name else detectedName
+    fun activeName(): String {
+        val baseName = if (selectedCandidateIndex in candidates.indices) candidates[selectedCandidateIndex].name else detectedName
+        return if (selectedCookingMethod != baselineCookingMethod) {
+            "$baseName (${selectedCookingMethod.labelAr})"
+        } else baseName
+    }
 
     fun activeSource(): String =
         if (selectedCandidateIndex in candidates.indices) candidates[selectedCandidateIndex].source else "a"

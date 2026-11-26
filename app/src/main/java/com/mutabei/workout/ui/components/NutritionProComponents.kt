@@ -131,7 +131,11 @@ data class AdaptiveTdeeEstimate(
     val spanDays: Int,
     val weeklyWeightChangeKg: Double,
     val recommendedKcal: Int,
-    val advice: String
+    val advice: String,
+    val isPlateauDetected: Boolean = false,
+    val isBodyRecompDetected: Boolean = false,
+    val plateauNoteAr: String = "",
+    val inBodyTrendSummaryAr: String = ""
 )
 
 fun computeAdaptiveTdee(
@@ -163,12 +167,53 @@ fun computeAdaptiveTdee(
     val actualTdee = ((rawTdee / 10.0).roundToInt() * 10)
     val weeklyChange = deltaKg / (spanDays / 7.0)
 
-    val goalDelta = when (goal) {
+    // InBody muscle & body fat trend analysis (distinguishes Body Recomp from true Plateau)
+    val inBodyRecords = bodyRecords
+        .filter { (it.smmKg != null || it.pbfPercent != null) && it.date in cutoff..today }
+        .sortedBy { it.date }
+    val deltaSmm = if (inBodyRecords.size >= 2 && inBodyRecords.first().smmKg != null && inBodyRecords.last().smmKg != null) {
+        inBodyRecords.last().smmKg!! - inBodyRecords.first().smmKg!!
+    } else null
+    val deltaPbf = if (inBodyRecords.size >= 2 && inBodyRecords.first().pbfPercent != null && inBodyRecords.last().pbfPercent != null) {
+        inBodyRecords.last().pbfPercent!! - inBodyRecords.first().pbfPercent!!
+    } else null
+
+    val inBodyTrendSummary = buildString {
+        if (deltaSmm != null || deltaPbf != null) {
+            append("تريند InBody: ")
+            deltaSmm?.let { append("عضل ${String.format("%+.1f", it)} كجم") }
+            if (deltaSmm != null && deltaPbf != null) append(" · ")
+            deltaPbf?.let { append("دهون ${String.format("%+.1f", it)}%") }
+        }
+    }
+
+    val isRecomp = abs(weeklyChange) <= 0.16 &&
+        ((deltaSmm != null && deltaSmm >= 0.2) && (deltaPbf != null && deltaPbf <= -0.4))
+
+    val isTruePlateau = !isRecomp &&
+        spanDays >= 14 &&
+        validNutrition.size >= 8 &&
+        ((goal == "cut" && weeklyChange > -0.12) || (goal == "bulk" && weeklyChange < 0.10))
+
+    val baseGoalDelta = when (goal) {
         "cut" -> -400
         "keep" -> 0
         else -> 250
     }
-    val recommended = (((actualTdee + goalDelta).coerceIn(1200, 6000)) / 10.0).roundToInt() * 10
+    val plateauAdjustment = when {
+        isTruePlateau && goal == "cut" -> -150
+        isTruePlateau && goal == "bulk" -> 150
+        else -> 0
+    }
+    val recommended = (((actualTdee + baseGoalDelta + plateauAdjustment).coerceIn(1200, 6000)) / 10.0).roundToInt() * 10
+
+    val plateauNote = when {
+        isRecomp -> "ممتاز! الميزان شبه ثابت لكن قياسات InBody بتأكد إعادة تشكيل جسم (Recomp: زيادة عضل مع نزول دهون) — لا تغيّر سعراتك بعنف."
+        isTruePlateau && goal == "cut" -> "تم رصد ثبات وزن (Plateau) لأكتر من أسبوعين رغم التزامك بالتسجيل. نقترح خفض 150 سعر يوميًا أو عمل يوم Refeed عالي الكارب ثم التطبيق."
+        isTruePlateau && goal == "bulk" -> "تم رصد ثبات في التضخيم (Plateau) لأكتر من أسبوعين. نقترح رفع السعرات +150 سعر/يوم (أغلبها كارب حول التمرين)."
+        else -> ""
+    }
+
     val advice = when (goal) {
         "cut" -> "بناءً على حرقك الفعلي، $recommended سعر هينزلك ~0.4 كجم دهون أسبوعيًا مع حماية العضل."
         "keep" -> "بناءً على حرقك الفعلي، $recommended سعر هيثبّت وزنك بدقة."
@@ -182,7 +227,11 @@ fun computeAdaptiveTdee(
         spanDays = spanDays,
         weeklyWeightChangeKg = weeklyChange,
         recommendedKcal = recommended,
-        advice = advice
+        advice = advice,
+        isPlateauDetected = isTruePlateau,
+        isBodyRecompDetected = isRecomp,
+        plateauNoteAr = plateauNote,
+        inBodyTrendSummaryAr = inBodyTrendSummary
     )
 }
 
@@ -196,8 +245,17 @@ fun AdaptiveTdeeSection(
     Surface(
         shape = MaterialTheme.shapes.small,
         color = MaterialTheme.colorScheme.background,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
-        modifier = Modifier.fillMaxWidth()
+        border = BorderStroke(
+            1.dp,
+            when {
+                estimate?.isPlateauDetected == true -> semantic.warn.copy(alpha = 0.65f)
+                estimate?.isBodyRecompDetected == true -> semantic.ok.copy(alpha = 0.6f)
+                else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+            }
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("adaptive_tdee_section")
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -214,7 +272,7 @@ fun AdaptiveTdeeSection(
                     modifier = Modifier.size(18.dp)
                 )
                 Text(
-                    text = "محرك الحرق الفعلي (Adaptive TDEE)",
+                    text = "الحرق الفعلي + كاشف الثبات وInBody (Dynamic TDEE)",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.ExtraBold,
                     color = MaterialTheme.colorScheme.primary
@@ -223,7 +281,7 @@ fun AdaptiveTdeeSection(
 
             if (estimate == null) {
                 Text(
-                    text = "سجّل على الأقل 4 أيام تغذية + قياسين وزن بينهم أسبوع عشان التطبيق يحسب حرق جسمك الحقيقي (مش النظري) ويظبطلك السعرات تلقائيًا.",
+                    text = "سجّل على الأقل 4 أيام تغذية + قياسين وزن أو InBody بينهم أسبوع عشان التطبيق يحسب حرق جسمك الحقيقي ويكشف أي ثبات (Plateau) تلقائيًا.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -259,12 +317,39 @@ fun AdaptiveTdeeSection(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (estimate.inBodyTrendSummaryAr.isNotBlank()) {
+                    Text(
+                        text = estimate.inBodyTrendSummaryAr,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                if (estimate.plateauNoteAr.isNotBlank()) {
+                    val noteColor = if (estimate.isBodyRecompDetected) semantic.ok else semantic.warn
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = noteColor.copy(alpha = 0.12f),
+                        border = BorderStroke(1.dp, noteColor.copy(alpha = 0.45f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("plateau_detector_banner")
+                    ) {
+                        Text(
+                            text = estimate.plateauNoteAr,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = noteColor,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                        )
+                    }
+                }
                 Text(
                     text = estimate.advice,
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold
                 )
-                if (theoreticalTargets == null || abs(theoreticalTargets.kcal - estimate.recommendedKcal) >= 30) {
+                if (theoreticalTargets == null || abs(theoreticalTargets.kcal - estimate.recommendedKcal) >= 30 || estimate.isPlateauDetected) {
                     Spacer(Modifier.height(2.dp))
                     Button(
                         onClick = { onApplyRecommendedKcal(estimate.recommendedKcal) },
@@ -272,7 +357,10 @@ fun AdaptiveTdeeSection(
                             .fillMaxWidth()
                             .testTag("apply_adaptive_kcal_button")
                     ) {
-                        Text("تطبيق ${estimate.recommendedKcal} سعر كهدف يومي")
+                        Text(
+                            if (estimate.isPlateauDetected) "كسر الثبات: تطبيق ${estimate.recommendedKcal} سعر"
+                            else "تطبيق ${estimate.recommendedKcal} سعر كهدف يومي"
+                        )
                     }
                 }
             }

@@ -12,13 +12,17 @@ import com.mutabei.workout.data.model.AiLabelResult
 import com.mutabei.workout.data.model.AiMacroTetrisResult
 import com.mutabei.workout.data.model.AiWeeklyCoachReport
 import com.mutabei.workout.data.model.BodyRecord
+import com.mutabei.workout.data.model.BuiltReverseMealItem
 import com.mutabei.workout.data.model.CoachAutoLoggedFood
 import com.mutabei.workout.data.model.CoachChatMessage
 import com.mutabei.workout.data.model.CoachReportRecord
 import com.mutabei.workout.data.model.CoachSuggestedFood
 import com.mutabei.workout.data.model.CoachSuggestedTargets
+import com.mutabei.workout.data.model.CookingMethodEngine
+import com.mutabei.workout.data.model.CookingMethodPreset
 import com.mutabei.workout.data.model.CustomFood
 import com.mutabei.workout.data.model.ExerciseSpec
+import com.mutabei.workout.data.model.FoodIngredientAuditResult
 import com.mutabei.workout.data.model.FoodItem
 import com.mutabei.workout.data.model.LoggedExercise
 import com.mutabei.workout.data.model.LoggedFoodItem
@@ -144,6 +148,7 @@ data class FoodSheetAiState(
     val errorOrInfo: String? = null,
     val detectedItems: List<AiFoodReviewItem> = emptyList(),
     val labelDraft: AiLabelResult? = null,
+    val ingredientAudit: FoodIngredientAuditResult? = null,
     val barcodeInput: String = ""
 )
 
@@ -236,6 +241,32 @@ class MainViewModel(
 
     private val _selectedNutritionDate = MutableStateFlow(todayIso())
     val selectedNutritionDate: StateFlow<String> = _selectedNutritionDate.asStateFlow()
+
+    // Client-only Nutrition V2 toggles (stored locally to keep Firestore schema untouched)
+    private val nutritionV2Prefs by lazy {
+        appContext.getSharedPreferences("nutrition_v2_prefs", Context.MODE_PRIVATE)
+    }
+    private val _rollingCalorieBudgetEnabled = MutableStateFlow(
+        appContext.getSharedPreferences("nutrition_v2_prefs", Context.MODE_PRIVATE)
+            .getBoolean("rolling_calorie_budget", true)
+    )
+    val rollingCalorieBudgetEnabled: StateFlow<Boolean> = _rollingCalorieBudgetEnabled.asStateFlow()
+
+    private val _workoutSyncedNutritionEnabled = MutableStateFlow(
+        appContext.getSharedPreferences("nutrition_v2_prefs", Context.MODE_PRIVATE)
+            .getBoolean("workout_synced_nutrition", true)
+    )
+    val workoutSyncedNutritionEnabled: StateFlow<Boolean> = _workoutSyncedNutritionEnabled.asStateFlow()
+
+    fun setRollingCalorieBudgetEnabled(enabled: Boolean) {
+        _rollingCalorieBudgetEnabled.value = enabled
+        nutritionV2Prefs.edit().putBoolean("rolling_calorie_budget", enabled).apply()
+    }
+
+    fun setWorkoutSyncedNutritionEnabled(enabled: Boolean) {
+        _workoutSyncedNutritionEnabled.value = enabled
+        nutritionV2Prefs.edit().putBoolean("workout_synced_nutrition", enabled).apply()
+    }
 
     // Draft sets per "dayIdx|exIdx" while working out
     private val _workoutDrafts = MutableStateFlow<Map<String, List<SetEntry>>>(emptyMap())
@@ -783,10 +814,33 @@ class MainViewModel(
         val snap = currentSnapshot()
         val day = snap.nutritionDays[date] ?: return
         val updatedItems = day.items.map {
-            if (it.id == itemId) it.copy(grams = grams, mealIndex = mealIndex) else it
+            if (it.id == itemId) it.copy(grams = (grams * 10.0).roundToInt() / 10.0, mealIndex = mealIndex) else it
         }
         viewModelScope.launch {
             firestoreRepo.saveNutritionDay(currentUserId, day.copy(items = updatedItems))
+        }
+    }
+
+    fun replaceLoggedFood(itemId: String, replacementFood: FoodItem, newGrams: Double, mealIndex: Int) {
+        if (newGrams <= 0.0) return
+        val date = _selectedNutritionDate.value
+        val snap = currentSnapshot()
+        val day = snap.nutritionDays[date] ?: return
+        val rawReplacement = LoggedFoodItem(
+            id = itemId,
+            name = replacementFood.name,
+            source = replacementFood.source,
+            grams = (newGrams * 10.0).roundToInt() / 10.0,
+            mealIndex = mealIndex,
+            nutrients = LoggedFoodItem.normalizeNutrients(replacementFood.nutrients)
+        )
+        viewModelScope.launch {
+            val enriched = offlineFoodRepo.enrichLoggedItem(rawReplacement, snap.customFoods)
+            val updatedItems = day.items.map { if (it.id == itemId) enriched else it }
+            val res = firestoreRepo.saveNutritionDay(currentUserId, day.copy(items = updatedItems))
+            if (res.isSuccess) {
+                showToast("تم التبديل إلى ${replacementFood.name} (${newGrams.roundToInt()} جم) ✅")
+            }
         }
     }
 
@@ -1683,7 +1737,13 @@ class MainViewModel(
         }
     }
 
-    fun requestMacroTetris(remKcal: Int, remProteinG: Int, remCarbsG: Int, remFatG: Int) {
+    fun requestMacroTetris(
+        remKcal: Int,
+        remProteinG: Int,
+        remCarbsG: Int,
+        remFatG: Int,
+        selectedFridgeItems: List<String> = emptyList()
+    ) {
         val snap = currentSnapshot()
         val favNames = snap.customFoods.filter { it.favorite || it.custom }.map { it.name }
         val microEvalJson = MicronutrientEngine.evaluateMicronutrients(
@@ -1692,7 +1752,7 @@ class MainViewModel(
             sex = snap.config.sex
         ).toGeminiJson()
         viewModelScope.launch {
-            _macroTetrisAi.value = AiMacroTetrisUiState(busyMessage = "Gemini بيصمم لك وجبة تقفّل باقي ماكروز النهارده...")
+            _macroTetrisAi.value = AiMacroTetrisUiState(busyMessage = "Gemini بيصمم لك وجبة تقفّل باقي ماكروز النهارده من تلاجتك...")
             val res = geminiRepo.suggestMacroTetrisMeals(
                 remKcal = remKcal.coerceAtLeast(0),
                 remProteinG = remProteinG.coerceAtLeast(0),
@@ -1700,6 +1760,7 @@ class MainViewModel(
                 remFatG = remFatG.coerceAtLeast(0),
                 goal = snap.config.goal,
                 favoriteNames = favNames,
+                fridgeIngredients = selectedFridgeItems,
                 micronutrientEvalJson = microEvalJson
             ) { stage ->
                 _macroTetrisAi.update { it.copy(busyMessage = stage) }
@@ -1715,6 +1776,36 @@ class MainViewModel(
         }
     }
 
+    fun logReverseMealPlan(items: List<BuiltReverseMealItem>) {
+        if (items.isEmpty()) return
+        val targetDate = _selectedNutritionDate.value
+        val snap = currentSnapshot()
+        val day = snap.nutritionDays[targetDate] ?: NutritionDay(id = targetDate, userId = currentUserId, date = targetDate)
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        val mealIndex = if (hour >= 17) 2 else 3 // 2 = العشاء, 3 = سناك
+
+        viewModelScope.launch {
+            offlineFoodRepo.ensureLoaded()
+            val newEntries = items.map { built ->
+                val raw = LoggedFoodItem(
+                    id = UUID.randomUUID().toString(),
+                    name = built.food.name,
+                    source = built.food.source,
+                    grams = built.grams,
+                    mealIndex = mealIndex,
+                    nutrients = LoggedFoodItem.normalizeNutrients(built.food.nutrients)
+                )
+                offlineFoodRepo.enrichLoggedItem(raw, snap.customFoods)
+            }
+            val res = firestoreRepo.saveNutritionDay(currentUserId, day.copy(items = day.items + newEntries))
+            if (res.isSuccess) {
+                showToast("تم تسجيل وجبة تقفيل اليوم (${newEntries.size} أصناف) ✅")
+            } else {
+                showToast("تعذّر تسجيل الوجبة")
+            }
+        }
+    }
+
     // ==================== GEMINI AI FOOD & BARCODE FLOWS ====================
 
     fun clearFoodSheetAi() {
@@ -1723,6 +1814,40 @@ class MainViewModel(
 
     fun updateBarcodeInput(value: String) {
         _foodSheetAi.update { it.copy(barcodeInput = value.filter { ch -> ch.isDigit() }) }
+    }
+
+    fun analyzeIngredientsQuality(bitmap: Bitmap) {
+        viewModelScope.launch {
+            _foodSheetAi.update {
+                it.copy(
+                    busyMessage = "مهندس جودة الأغذية بيفحص المكونات والدهون المهدرجة والسكر الخفي والمواد الحافظة...",
+                    errorOrInfo = null,
+                    ingredientAudit = null
+                )
+            }
+            val result = geminiRepo.auditIngredientsLabel(bitmap) { stage ->
+                _foodSheetAi.update { it.copy(busyMessage = stage) }
+            }
+            result.fold(
+                onSuccess = { audit ->
+                    _foodSheetAi.update {
+                        it.copy(
+                            busyMessage = null,
+                            errorOrInfo = "تم فحص جودة المكونات بنجاح (Clean Score: ${audit.cleanScore}/10) ✅",
+                            ingredientAudit = audit
+                        )
+                    }
+                },
+                onFailure = { e ->
+                    _foodSheetAi.update {
+                        it.copy(
+                            busyMessage = null,
+                            errorOrInfo = e.message ?: "تعذّر فحص قائمة المكونات. جرّب تصوير ظهر العبوة بإضاءة أوضح."
+                        )
+                    }
+                }
+            )
+        }
     }
 
     fun analyzeNutritionLabel(bitmap: Bitmap) {
@@ -1833,15 +1958,19 @@ class MainViewModel(
                     val cands = offlineFoodRepo.candidatesFor(raw, customFoods)
                     val vec = NutritionConstants.vectorFromMap(raw.fallbackPer100)
                     val populatedCount = vec.count { it >= 0.0 }
+                    val detectedLabel = raw.nameAr.ifBlank { raw.nameEn }
+                    val inferredMethod = CookingMethodEngine.inferBaselineMethod(raw.nameAr, raw.nameEn)
                     AiFoodReviewItem(
                         id = "ai_${idx}_${System.currentTimeMillis()}",
-                        detectedName = raw.nameAr.ifBlank { raw.nameEn },
+                        detectedName = detectedLabel,
                         grams = raw.grams,
                         selected = true,
                         fallbackVector = vec,
                         candidates = cands,
                         // Prefer Gemini's full micronutrient analysis when populated; user can still switch to DB candidates
-                        selectedCandidateIndex = if (populatedCount >= 10 || cands.isEmpty()) -1 else 0
+                        selectedCandidateIndex = if (populatedCount >= 10 || cands.isEmpty()) -1 else 0,
+                        baselineCookingMethod = inferredMethod,
+                        selectedCookingMethod = inferredMethod
                     )
                 }
                 _foodSheetAi.update {
@@ -1871,6 +2000,16 @@ class MainViewModel(
                             selectedCandidateIndex = candidateIndex ?: item.selectedCandidateIndex
                         )
                     } else item
+                }
+            )
+        }
+    }
+
+    fun updateAiCookingMethod(itemId: String, method: CookingMethodPreset) {
+        _foodSheetAi.update { state ->
+            state.copy(
+                detectedItems = state.detectedItems.map { item ->
+                    if (item.id == itemId) item.copy(selectedCookingMethod = method) else item
                 }
             )
         }
