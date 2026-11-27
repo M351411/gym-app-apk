@@ -51,6 +51,8 @@ data class FatSolubleEvaluation(
     val todayIntake: Double,
     val todayFoodSource: Double,
     val todaySupplementSource: Double,
+    val todayCarryInSource: Double = 0.0,
+    val todayCarryInLabel: String? = null,
     val dailyTargetBase: Double,
     val sevenDayTotal: Double,
     val sevenDayAvg: Double,
@@ -116,6 +118,9 @@ data class MicronutrientEvaluationReport(
             o.put("today_intake", round1(f.todayIntake))
             o.put("today_food_source", round1(f.todayFoodSource))
             o.put("today_supplement_source", round1(f.todaySupplementSource))
+            if (f.todayCarryInSource > 0.0) {
+                o.put("today_carry_in_from_yesterday", round1(f.todayCarryInSource))
+            }
             o.put("daily_target_base", round1(f.dailyTargetBase))
             o.put("seven_day_total", round1(f.sevenDayTotal))
             o.put("seven_day_avg", f.sevenDayAvg.roundToInt())
@@ -303,7 +308,18 @@ object MicronutrientEngine {
                 }
             }
 
-            val todayIntake = todayFood + todaySupp
+            // Apply Vitamin D3 every-other-day carryover (e.g. yesterday's 10,000 IU Davalindi carries +5,000 IU into today).
+            // Note: sevenDayTotal already sums yesterday's full logged dose across the 7-day window, so carry-in is applied
+            // ONLY to todayIntake (never added again to sevenDayTotal) to prevent double-counting.
+            val vdBreakdown = if (spec.key == "vD") {
+                NutritionConstants.computeVitaminDBreakdown(referenceDate, nutritionDays)
+            } else null
+            val todayCarryIn = (vdBreakdown?.carryInFromYesterdayMcg ?: 0.0) * scale
+            if (todayCarryIn > 0.0) {
+                hasAnyData = true
+            }
+
+            val todayIntake = todayFood + todaySupp + todayCarryIn
             // Preserve Vitamin D3 custom 5,000 IU baseline regardless of sex;
             // respect RDA for A/E/K (which equals 900 mcg / 15 mg / 120 mcg for male).
             val dailyTargetBase = if (spec.key == "vD") {
@@ -333,6 +349,8 @@ object MicronutrientEngine {
                 todayIntake = todayIntake,
                 todayFoodSource = todayFood,
                 todaySupplementSource = todaySupp,
+                todayCarryInSource = todayCarryIn,
+                todayCarryInLabel = vdBreakdown?.yesterdaySourceName,
                 dailyTargetBase = dailyTargetBase,
                 sevenDayTotal = sevenDayTotal,
                 sevenDayAvg = sevenDayAvg,

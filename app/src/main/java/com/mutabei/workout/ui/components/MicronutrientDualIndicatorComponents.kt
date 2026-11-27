@@ -42,12 +42,19 @@ fun FatSolubleDualIndicatorCard(
     modifier: Modifier = Modifier
 ) {
     val semantic = LocalSemanticColors.current
+    val isCoveredByCarryIn = eval.todayCarryInSource > 0.0 && eval.todayIntake >= eval.dailyTargetBase
     val badgeColor: Color = when (eval.status) {
         MicronutrientStatus.TOXICITY_WARNING -> semantic.low
         MicronutrientStatus.APPROACHING_UL -> semantic.warn
         MicronutrientStatus.WEEKLY_BUFFER_ACTIVE -> semantic.ok
         MicronutrientStatus.NEEDS_TOP_UP -> semantic.warn
-        MicronutrientStatus.ON_TRACK -> MaterialTheme.colorScheme.primary
+        MicronutrientStatus.ON_TRACK -> if (isCoveredByCarryIn || eval.todayIntake >= eval.dailyTargetBase) semantic.ok else MaterialTheme.colorScheme.primary
+    }
+
+    val badgeLabel: String = when {
+        eval.status == MicronutrientStatus.ON_TRACK && isCoveredByCarryIn -> "مُغطى اليوم (مُرحّل)"
+        eval.status == MicronutrientStatus.ON_TRACK && eval.todayIntake >= eval.dailyTargetBase -> "مُغطى اليوم"
+        else -> eval.uiBadge
     }
 
     val reserveBarColor: Color = when (eval.status) {
@@ -63,10 +70,10 @@ fun FatSolubleDualIndicatorCard(
         color = MaterialTheme.colorScheme.background,
         border = BorderStroke(
             width = 1.dp,
-            color = when (eval.status) {
-                MicronutrientStatus.TOXICITY_WARNING -> semantic.low.copy(alpha = 0.65f)
-                MicronutrientStatus.APPROACHING_UL -> semantic.warn.copy(alpha = 0.55f)
-                MicronutrientStatus.WEEKLY_BUFFER_ACTIVE -> semantic.ok.copy(alpha = 0.45f)
+            color = when {
+                eval.status == MicronutrientStatus.TOXICITY_WARNING -> semantic.low.copy(alpha = 0.65f)
+                eval.status == MicronutrientStatus.APPROACHING_UL -> semantic.warn.copy(alpha = 0.55f)
+                eval.status == MicronutrientStatus.WEEKLY_BUFFER_ACTIVE || isCoveredByCarryIn -> semantic.ok.copy(alpha = 0.45f)
                 else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
             }
         ),
@@ -102,10 +109,11 @@ fun FatSolubleDualIndicatorCard(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val badgeIcon = when (eval.status) {
-                            MicronutrientStatus.TOXICITY_WARNING,
-                            MicronutrientStatus.APPROACHING_UL -> Icons.Rounded.Warning
-                            MicronutrientStatus.WEEKLY_BUFFER_ACTIVE -> Icons.Rounded.CheckCircle
+                        val badgeIcon = when {
+                            eval.status == MicronutrientStatus.TOXICITY_WARNING ||
+                                eval.status == MicronutrientStatus.APPROACHING_UL -> Icons.Rounded.Warning
+                            eval.status == MicronutrientStatus.WEEKLY_BUFFER_ACTIVE ||
+                                (eval.status == MicronutrientStatus.ON_TRACK && eval.todayIntake >= eval.dailyTargetBase) -> Icons.Rounded.CheckCircle
                             else -> Icons.Rounded.Shield
                         }
                         Icon(
@@ -115,7 +123,7 @@ fun FatSolubleDualIndicatorCard(
                             modifier = Modifier.size(13.dp)
                         )
                         Text(
-                            text = eval.uiBadge,
+                            text = badgeLabel,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = badgeColor
@@ -124,7 +132,7 @@ fun FatSolubleDualIndicatorCard(
                 }
             }
 
-            // Indicator 1: Today's Intake vs Daily Base
+            // Indicator 1: Today's Intake vs Daily Base (includes automatic Vitamin D3 carryover from yesterday)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -136,9 +144,10 @@ fun FatSolubleDualIndicatorCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    text = formatCounterLtr(fmtMicro(eval.todayIntake, eval.unit), fmtMicro(eval.dailyTargetBase, eval.unit), eval.unit),
+                    text = isolateLtr("${fmtMicro(eval.todayIntake, eval.unit)} / ${fmtMicro(eval.dailyTargetBase, eval.unit)} ${eval.unit}"),
                     style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (eval.todayIntake >= eval.dailyTargetBase) semantic.ok else MaterialTheme.colorScheme.onSurface
                 )
             }
             MetricProgressBar(
@@ -146,10 +155,22 @@ fun FatSolubleDualIndicatorCard(
                 target = eval.dailyTargetBase.coerceAtLeast(1.0),
                 barColor = if (eval.todayIntake >= eval.dailyTargetBase) semantic.ok else MaterialTheme.colorScheme.secondary
             )
-            if (eval.todaySupplementSource > 0.0 && eval.todayFoodSource > 0.0) {
+            if (eval.todayCarryInSource > 0.0) {
+                val breakdownParts = buildList {
+                    if (eval.todayFoodSource > 0.0) add("أكل ${isolateLtr(fmtMicro(eval.todayFoodSource, eval.unit))}")
+                    if (eval.todaySupplementSource > 0.0) add("مكملات ${isolateLtr(fmtMicro(eval.todaySupplementSource, eval.unit))}")
+                    add("مُرحّل من أمس ${isolateLtr("+${fmtMicro(eval.todayCarryInSource, eval.unit)} ${eval.unit}")}")
+                }.joinToString(" · ")
                 Text(
-                    text = "اليوم: أكل ${fmtMicro(eval.todayFoodSource, eval.unit)} · مكملات ${fmtMicro(eval.todaySupplementSource, eval.unit)} ${eval.unit}",
-                    style = MaterialTheme.typography.labelSmall,
+                    text = "اليوم: $breakdownParts",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                    fontWeight = FontWeight.SemiBold,
+                    color = semantic.ok
+                )
+            } else if (eval.todaySupplementSource > 0.0 && eval.todayFoodSource > 0.0) {
+                Text(
+                    text = "اليوم: أكل ${isolateLtr(fmtMicro(eval.todayFoodSource, eval.unit))} · مكملات ${isolateLtr("${fmtMicro(eval.todaySupplementSource, eval.unit)} ${eval.unit}")}",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -163,13 +184,13 @@ fun FatSolubleDualIndicatorCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "مخزون 7 أيام (${eval.weeklyPercentage.roundToInt()}%)",
-                    style = MaterialTheme.typography.labelMedium,
+                    text = "مخزون ${isolateLtr("7")} أيام (${isolateLtr("${eval.weeklyPercentage.roundToInt()}%")})",
+                    style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
                     fontWeight = FontWeight.Bold,
                     color = reserveBarColor
                 )
                 Text(
-                    text = formatCounterLtr(fmtMicro(eval.sevenDayTotal, eval.unit), fmtMicro(eval.weeklyTarget, eval.unit), eval.unit),
+                    text = isolateLtr("${fmtMicro(eval.sevenDayTotal, eval.unit)} / ${fmtMicro(eval.weeklyTarget, eval.unit)} ${eval.unit}"),
                     style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
                     fontWeight = FontWeight.Bold
                 )
@@ -187,17 +208,17 @@ fun FatSolubleDualIndicatorCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "متوسط 7 أيام: ${fmtMicro(eval.sevenDayAvg, eval.unit)} ${eval.unit}/يوم",
-                    style = MaterialTheme.typography.labelSmall,
+                    text = "متوسط ${isolateLtr("7")} أيام: ${isolateLtr("${fmtMicro(eval.sevenDayAvg, eval.unit)} ${eval.unit}")}/يوم",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
                     text = if (eval.remainingWeeklyPool > 0.0) {
-                        "متبقي: ${fmtMicro(eval.remainingWeeklyPool, eval.unit)} ${eval.unit}"
+                        "متبقي: ${isolateLtr("${fmtMicro(eval.remainingWeeklyPool, eval.unit)} ${eval.unit}")}"
                     } else {
                         "المخزون الأسبوعي مُغطى"
                     },
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                     fontWeight = FontWeight.SemiBold,
                     color = if (eval.remainingWeeklyPool <= 0.0) semantic.ok else MaterialTheme.colorScheme.onSurfaceVariant
                 )
