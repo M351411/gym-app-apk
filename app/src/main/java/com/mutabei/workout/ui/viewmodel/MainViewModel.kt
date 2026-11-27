@@ -51,6 +51,7 @@ import com.mutabei.workout.data.repository.NutrientFoodSuggestion
 import com.mutabei.workout.data.repository.OfflineFoodRepository
 import com.mutabei.workout.data.repository.OpenFoodFactsRepository
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -98,6 +99,13 @@ data class AppDataSnapshot(
     val bodyRecords: List<BodyRecord> = emptyList(),
     val customFoods: List<CustomFood> = emptyList(),
     val coachReports: List<CoachReportRecord> = emptyList()
+)
+
+data class BodyTapeRecord(
+    val date: String = todayIso(),
+    val waistCm: Double? = null,
+    val chestCm: Double? = null,
+    val armCm: Double? = null
 )
 
 data class BodyDraftState(
@@ -242,20 +250,14 @@ class MainViewModel(
     private val _selectedNutritionDate = MutableStateFlow(todayIso())
     val selectedNutritionDate: StateFlow<String> = _selectedNutritionDate.asStateFlow()
 
-    // Client-only Nutrition V2 toggles (stored locally to keep Firestore schema untouched)
+    // Client-only Nutrition V2 toggles (hydrated off the main thread to keep cold start fast)
     private val nutritionV2Prefs by lazy {
         appContext.getSharedPreferences("nutrition_v2_prefs", Context.MODE_PRIVATE)
     }
-    private val _rollingCalorieBudgetEnabled = MutableStateFlow(
-        appContext.getSharedPreferences("nutrition_v2_prefs", Context.MODE_PRIVATE)
-            .getBoolean("rolling_calorie_budget", true)
-    )
+    private val _rollingCalorieBudgetEnabled = MutableStateFlow(true)
     val rollingCalorieBudgetEnabled: StateFlow<Boolean> = _rollingCalorieBudgetEnabled.asStateFlow()
 
-    private val _workoutSyncedNutritionEnabled = MutableStateFlow(
-        appContext.getSharedPreferences("nutrition_v2_prefs", Context.MODE_PRIVATE)
-            .getBoolean("workout_synced_nutrition", true)
-    )
+    private val _workoutSyncedNutritionEnabled = MutableStateFlow(true)
     val workoutSyncedNutritionEnabled: StateFlow<Boolean> = _workoutSyncedNutritionEnabled.asStateFlow()
 
     fun setRollingCalorieBudgetEnabled(enabled: Boolean) {
@@ -303,6 +305,13 @@ class MainViewModel(
     private val _bodyDraft = MutableStateFlow(BodyDraftState())
     val bodyDraft: StateFlow<BodyDraftState> = _bodyDraft.asStateFlow()
 
+    // Body Tape Measurements (Waist, Chest, Arm in cm) persisted locally per user & hydrated off main thread
+    private val bodyTapePrefs by lazy {
+        appContext.getSharedPreferences("mutabei_body_tape_$currentUserId", Context.MODE_PRIVATE)
+    }
+    private val _bodyTapeRecords = MutableStateFlow<List<BodyTapeRecord>>(emptyList())
+    val bodyTapeRecords: StateFlow<List<BodyTapeRecord>> = _bodyTapeRecords.asStateFlow()
+
     // Weekly micro suggestions cache
     private val _microSuggestions = MutableStateFlow<Map<String, List<NutrientFoodSuggestion>>>(emptyMap())
     val microSuggestions: StateFlow<Map<String, List<NutrientFoodSuggestion>>> = _microSuggestions.asStateFlow()
@@ -333,7 +342,10 @@ class MainViewModel(
     val enrichMicrosBusy: StateFlow<String?> = _enrichMicrosBusy.asStateFlow()
 
     init {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
+            _rollingCalorieBudgetEnabled.value = nutritionV2Prefs.getBoolean("rolling_calorie_budget", true)
+            _workoutSyncedNutritionEnabled.value = nutritionV2Prefs.getBoolean("workout_synced_nutrition", true)
+            _bodyTapeRecords.value = loadBodyTapeRecordsFromPrefs()
             offlineFoodRepo.ensureLoaded()
             syncRequestedYesterdayMealsOnce()
         }
@@ -2215,7 +2227,7 @@ class MainViewModel(
         }
     }
 
-    fun saveBodyDraft() {
+    fun saveBodyDraft(onSaved: () -> Unit = {}) {
         val record = _bodyDraft.value.toBodyRecord()
         if (record.weightKg == null && record.pbfPercent == null && record.smmKg == null) {
             showToast("اكتب الوزن على الأقل.")
@@ -2226,6 +2238,7 @@ class MainViewModel(
             if (res.isSuccess) {
                 _bodyDraft.value = BodyDraftState()
                 showToast("تم حفظ القياس ✅")
+                onSaved()
             } else {
                 showToast("تعذّر حفظ القياس: ${res.exceptionOrNull()?.localizedMessage ?: ""}")
             }
@@ -2237,6 +2250,110 @@ class MainViewModel(
             val res = firestoreRepo.deleteBodyRecord(currentUserId, date)
             if (res.isSuccess) showToast("تم حذف القياس.")
         }
+    }
+
+    fun applyBodyFatPlanToCalories(
+        targetBfPercent: Double,
+        latestWeightKg: Double,
+        fatToLoseKg: Double,
+        weeklyLossKg: Double
+    ) {
+        val snap = currentSnapshot()
+        val cfg = snap.config
+        val currentTargets = computeTargets(cfg, snap.bodyRecords)
+        val estimatedTdee = currentTargets?.tdee
+            ?: ((latestWeightKg * 22.0 + 500.0) * cfg.activityFactor).roundToInt()
+        val minSafeKcal = if (cfg.sex == "f") 1250 else 1500
+        val newGoal: String
+        val recommendedKcal: Int
+        val detailNote: String
+        if (fatToLoseKg > 0.1) {
+            val dailyDeficit = ((weeklyLossKg * 7700.0) / 7.0).roundToInt().coerceIn(250, 750)
+            recommendedKcal = (estimatedTdee - dailyDeficit).coerceIn(minSafeKcal, 8000)
+            newGoal = "cut"
+            detailNote = "تنشيف · عجز -$dailyDeficit سعر/يوم"
+        } else {
+            recommendedKcal = estimatedTdee.coerceIn(minSafeKcal, 8000)
+            newGoal = "keep"
+            detailNote = "ثبات وحفاظ على النسبة المستهدفة"
+        }
+        updateConfig(
+            cfg.copy(
+                targetBodyFat = targetBfPercent.coerceIn(5.0, 45.0),
+                goal = newGoal,
+                kcalOverride = recommendedKcal
+            )
+        )
+        showToast("تم تطبيق الخطة على سعراتك: $recommendedKcal سعر ($detailNote) ✅")
+    }
+
+    private fun loadBodyTapeRecordsFromPrefs(): List<BodyTapeRecord> {
+        val raw = bodyTapePrefs.getString("records_json", null) ?: return emptyList()
+        return try {
+            val arr = JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val date = o.optString("date").takeIf { it.isNotBlank() } ?: continue
+                    fun optPos(k: String): Double? =
+                        if (o.has(k) && !o.isNull(k)) o.optDouble(k).takeIf { !it.isNaN() && it > 0.0 } else null
+                    add(
+                        BodyTapeRecord(
+                            date = date,
+                            waistCm = optPos("waist"),
+                            chestCm = optPos("chest"),
+                            armCm = optPos("arm")
+                        )
+                    )
+                }
+            }.sortedBy { it.date }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun persistBodyTapeRecords(list: List<BodyTapeRecord>) {
+        val arr = JSONArray()
+        list.sortedBy { it.date }.takeLast(60).forEach { rec ->
+            arr.put(
+                JSONObject().apply {
+                    put("date", rec.date)
+                    rec.waistCm?.let { put("waist", it) }
+                    rec.chestCm?.let { put("chest", it) }
+                    rec.armCm?.let { put("arm", it) }
+                }
+            )
+        }
+        bodyTapePrefs.edit().putString("records_json", arr.toString()).apply()
+    }
+
+    fun saveBodyTapeRecord(
+        date: String = todayIso(),
+        waistCm: Double?,
+        chestCm: Double?,
+        armCm: Double?
+    ) {
+        if (waistCm == null && chestCm == null && armCm == null) {
+            showToast("أدخل قياس واحد على الأقل بالسنتيمتر.")
+            return
+        }
+        val cleanDate = date.ifBlank { todayIso() }
+        val updated = (_bodyTapeRecords.value.filterNot { it.date == cleanDate } + BodyTapeRecord(
+            date = cleanDate,
+            waistCm = waistCm?.coerceIn(30.0, 220.0),
+            chestCm = chestCm?.coerceIn(40.0, 220.0),
+            armCm = armCm?.coerceIn(15.0, 80.0)
+        )).sortedBy { it.date }
+        _bodyTapeRecords.value = updated
+        persistBodyTapeRecords(updated)
+        showToast("تم حفظ قياسات المازورة ✅")
+    }
+
+    fun deleteBodyTapeRecord(date: String) {
+        val updated = _bodyTapeRecords.value.filterNot { it.date == date }
+        _bodyTapeRecords.value = updated
+        persistBodyTapeRecords(updated)
+        showToast("تم حذف قياس المازورة.")
     }
 
     // ==================== BACKUP, RESTORE & CUSTOM SPLIT ====================

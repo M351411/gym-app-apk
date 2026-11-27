@@ -83,13 +83,14 @@ import com.mutabei.workout.ui.viewmodel.RestTimerState
 
 /**
  * Wraps an English or numeric token in Unicode Left-to-Right Isolate (LRI ... PDI)
- * so mixed Arabic RTL strings never flip parentheses or swap numeric ratios.
+ * anchored with Left-to-Right Marks (LRM) so mixed Arabic RTL strings NEVER flip
+ * parentheses, colons, or swap numeric ratios (e.g. `0 / 12`, `25 / 67`) on any Android version.
  */
-fun isolateLtr(text: String): String = "\u2066$text\u2069"
+fun isolateLtr(text: String): String = "\u2066\u200E$text\u200E\u2069"
 
 /**
- * Unified counter formatting: `[Current] / [Target] [Unit]` with LTR isolation for the numbers.
- * Example: `formatCounterLtr("81", "159", "جم")` -> `\u206681 / 159\u2069 جم`.
+ * Unified counter formatting: `[Current] / [Target] [Unit]` with strict LTR isolation for the numbers.
+ * Example: `formatCounterLtr("25", "67", "مجموعة")` -> `\u2066\u200E25 / 67\u200E\u2069 مجموعة`.
  */
 fun formatCounterLtr(current: String, target: String, unit: String = ""): String {
     val ratio = isolateLtr("$current / $target")
@@ -478,7 +479,10 @@ fun ExpandableSectionCard(
             )
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        val isDark = MaterialTheme.colorScheme.background.luminance() < 0.35f
+        val subtitleColor = if (isDark) Color(0xFF9CA3AF) else MaterialTheme.colorScheme.onSurfaceVariant
+
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -509,15 +513,23 @@ fun ExpandableSectionCard(
                 ) {
                     Text(
                         text = displayTitle,
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontSize = 14.sp,
+                            lineHeight = 19.sp
+                        ),
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (!displaySubtitle.isNullOrBlank()) {
                         Text(
                             text = isolateLtr(displaySubtitle),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 11.sp,
+                                lineHeight = 14.sp
+                            ),
+                            color = subtitleColor,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -532,7 +544,7 @@ fun ExpandableSectionCard(
                 Icon(
                     imageVector = Icons.Rounded.ExpandMore,
                     contentDescription = if (expanded) "إخفاء" else "عرض",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = subtitleColor,
                     modifier = Modifier
                         .size(22.dp)
                         .rotate(chevronRotation)

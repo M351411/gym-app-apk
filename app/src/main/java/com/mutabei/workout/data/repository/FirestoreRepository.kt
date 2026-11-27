@@ -16,22 +16,35 @@ import com.mutabei.workout.data.model.UserConfig
 import com.mutabei.workout.data.model.WorkoutSession
 import com.mutabei.workout.data.model.shiftIsoDate
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.util.UUID
 
 class FirestoreRepository(
-    private val db: FirebaseFirestore,
-    private val auth: FirebaseAuth = Firebase.auth
+    dbProvider: () -> FirebaseFirestore,
+    authProvider: () -> FirebaseAuth = { Firebase.auth }
 ) {
+    private val db: FirebaseFirestore by lazy(dbProvider)
+    private val auth: FirebaseAuth by lazy(authProvider)
+
+    constructor(
+        db: FirebaseFirestore,
+        auth: FirebaseAuth = Firebase.auth
+    ) : this(dbProvider = { db }, authProvider = { auth })
+
     constructor(context: Context) : this(
-        FirebaseFirestore.getInstance(
-            context.applicationContext.getString(R.string.firestore_database_id)
-        )
+        dbProvider = {
+            val appCtx = context.applicationContext
+            FirebaseFirestore.getInstance(
+                appCtx.getString(R.string.firestore_database_id)
+            )
+        }
     )
 
     private fun requireUserId(expectedUid: String): String {
@@ -54,7 +67,7 @@ class FirestoreRepository(
                     throw error
                 }
         )
-    }
+    }.flowOn(Dispatchers.IO)
 
     fun observeCoachReports(userId: String): Flow<List<CoachReportRecord>> = flow {
         val path = "users/$userId/coachReports"
@@ -73,7 +86,7 @@ class FirestoreRepository(
                     throw error
                 }
         )
-    }
+    }.flowOn(Dispatchers.IO)
 
     fun observeWorkoutSessions(userId: String): Flow<Map<String, WorkoutSession>> = flow {
         val path = "users/$userId/workoutSessions"
@@ -89,7 +102,7 @@ class FirestoreRepository(
                     throw error
                 }
         )
-    }
+    }.flowOn(Dispatchers.IO)
 
     fun observeNutritionDays(userId: String): Flow<Map<String, NutritionDay>> = flow {
         val path = "users/$userId/nutritionDays"
@@ -105,7 +118,7 @@ class FirestoreRepository(
                     throw error
                 }
         )
-    }
+    }.flowOn(Dispatchers.IO)
 
     /**
      * Fetches the 7-day rolling nutrition window (endDateIso + past 6 calendar days)
@@ -162,7 +175,7 @@ class FirestoreRepository(
                     throw error
                 }
         )
-    }
+    }.flowOn(Dispatchers.IO)
 
     fun observeBodyRecords(userId: String): Flow<List<BodyRecord>> = flow {
         val path = "users/$userId/bodyRecords"
@@ -178,7 +191,7 @@ class FirestoreRepository(
                     throw error
                 }
         )
-    }
+    }.flowOn(Dispatchers.IO)
 
     fun observeCustomFoods(userId: String): Flow<List<CustomFood>> = flow {
         val path = "users/$userId/customFoods"
@@ -194,7 +207,7 @@ class FirestoreRepository(
                     throw error
                 }
         )
-    }
+    }.flowOn(Dispatchers.IO)
 
     suspend fun saveUserConfig(userId: String, config: UserConfig): Result<Unit> {
         val path = "users/$userId"

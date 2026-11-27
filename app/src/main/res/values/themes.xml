@@ -1,4 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.MutabeiWorkout" parent="android:Theme.Material.Light.NoActionBar" />
+    <color name="dark_window_bg">#12151C</color>
+
+    <style name="Theme.MutabeiWorkout" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/dark_window_bg</item>
+        <item name="android:colorBackground">@color/dark_window_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <style name="Theme.MutabeiWorkout.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/dark_window_bg</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.MutabeiWorkout</item>
+    </style>
 </resources>

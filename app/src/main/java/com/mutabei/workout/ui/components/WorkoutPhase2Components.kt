@@ -139,7 +139,7 @@ fun WorkoutSessionSummaryCard(
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                         ) {
                             Icon(Icons.Rounded.EmojiEvents, contentDescription = null, tint = semantic.ok, modifier = Modifier.size(13.dp))
-                            Text("$prCount PR", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.ExtraBold, color = semantic.ok)
+                            Text(isolateLtr("$prCount PR"), style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"), fontWeight = FontWeight.ExtraBold, color = semantic.ok)
                         }
                     }
                 }
@@ -150,20 +150,20 @@ fun WorkoutSessionSummaryCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 SummaryStatChip(
-                    label = "الحجم (Tonnage)",
-                    value = if (tonnage >= 1000.0) "${String.format("%.2f", tonnage / 1000.0)} طن" else "${tonnage.roundToInt()} كجم",
+                    label = "الحجم الكلي",
+                    value = if (tonnage >= 1000.0) "${isolateLtr(String.format("%.2f", tonnage / 1000.0))} طن" else "${isolateLtr("${tonnage.roundToInt()}")} كجم",
                     modifier = Modifier.weight(1f)
                 )
                 SummaryStatChip(
                     label = "مجموعات مكتملة",
-                    value = "$setsDone مجموعة",
+                    value = "${isolateLtr("$setsDone")} مجموعة",
                     modifier = Modifier.weight(1f)
                 )
                 if (deltaPct != null) {
                     val accent = if (deltaPct >= 0.0) semantic.ok else semantic.warn
                     SummaryStatChip(
                         label = "عن آخر جلسة",
-                        value = "${String.format("%+.1f", deltaPct)}%",
+                        value = isolateLtr("${String.format("%+.1f", deltaPct)}%"),
                         valueColor = accent,
                         modifier = Modifier.weight(1f)
                     )
@@ -274,10 +274,10 @@ fun MuscleRecoveryHeatmapCard(snapshot: AppDataSnapshot) {
         }
     }
     val (recoveryPillText, recoveryPillColor) = when {
-        needsDeload -> "إجهاد · Deload" to semantic.warn
-        readyPct >= 80 -> "جاهز $readyPct%" to semantic.ok
+        needsDeload -> "إجهاد · ${isolateLtr("Deload")}" to semantic.warn
+        readyPct >= 80 -> "جاهز ${isolateLtr("$readyPct%")}" to semantic.ok
         readyPct >= 50 -> "إجهاد متوسط" to semantic.warn
-        else -> "استشفاء $readyPct%" to semantic.low
+        else -> "استشفاء ${isolateLtr("$readyPct%")}" to semantic.low
     }
 
     ExpandableSectionCard(
@@ -308,15 +308,15 @@ fun MuscleRecoveryHeatmapCard(snapshot: AppDataSnapshot) {
                     )
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
-                            text = "تنبيه استشفاء عصبي (وقت Deload)",
+                            text = "تنبيه استشفاء عصبي · ${isolateLtr("Deload")}",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Bold,
                             color = semantic.warn
                         )
                         Text(
-                            text = "بقالك ${deloadMeta.first} أسابيع تمرين متواصلة" +
-                                (if (deloadMeta.second > 0) " مع ثبات في ${deloadMeta.second} تمارين" else "") +
-                                ". فكّر تعمل أسبوع Deload (نص المجموعات وبأوزان 60–70%) عشان ترجع أقوى.",
+                            text = "بقالك ${isolateLtr("${deloadMeta.first}")} أسابيع تمرين متواصلة" +
+                                (if (deloadMeta.second > 0) " مع ثبات في ${isolateLtr("${deloadMeta.second}")} تمارين" else "") +
+                                ". فكّر تعمل أسبوع ${isolateLtr("Deload")} بنص المجموعات وبأوزان ${isolateLtr("60–70%")} عشان ترجع أقوى.",
                             style = MaterialTheme.typography.bodySmall
                         )
                     }

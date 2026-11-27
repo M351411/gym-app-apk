@@ -12,21 +12,31 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -40,8 +50,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -80,6 +92,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -117,6 +130,7 @@ import com.mutabei.workout.ui.components.RestTimerOverlay
 import com.mutabei.workout.ui.components.formatWorkoutElapsed
 import com.mutabei.workout.ui.components.isolateLtr
 import com.mutabei.workout.ui.components.subtleCardBorderColor
+import com.mutabei.workout.ui.components.tactilePressScale
 import com.mutabei.workout.ui.screens.AiCoachHubSheet
 import com.mutabei.workout.ui.screens.AuthScreen
 import com.mutabei.workout.ui.screens.BodyScreen
@@ -139,10 +153,14 @@ import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         // Must execute first before any Firebase API (Auth, Firestore, AI Logic) is accessed.
         configureAppCheck(this, intent)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
 
         setContent {
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
@@ -169,7 +187,7 @@ class MainActivity : ComponentActivity() {
 
                 val activeUser = currentUser
                 if (activeUser == null) {
-                    MutabeiTheme {
+                    MutabeiTheme(themeMode = "dark") {
                         AuthScreen(
                             onAuthSuccess = { verifiedUser ->
                                 currentUser = Firebase.auth.currentUser ?: verifiedUser
@@ -249,7 +267,8 @@ private fun MainAppShell(user: FirebaseUser) {
     var workoutFabVisible by remember { mutableStateOf(true) }
 
     val snapshot = (dataState as? UiState.Success)?.data
-    val themeMode = snapshot?.config?.themeMode ?: "system"
+    // Default to dark during initial hydration so no white frame ever flashes after the dark splash screen
+    val themeMode = snapshot?.config?.themeMode ?: "dark"
 
     LaunchedEffect(selectedTab) {
         workoutFabVisible = true
@@ -478,22 +497,7 @@ private fun MainAppShell(user: FirebaseUser) {
 
                                 when (val st = dataState) {
                                     UiState.Loading -> {
-                                        Box(
-                                            modifier = Modifier.fillMaxSize(),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Column(
-                                                horizontalAlignment = Alignment.CenterHorizontally,
-                                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                                            ) {
-                                                CircularProgressIndicator()
-                                                Text(
-                                                    text = "جاري تحميل بياناتك...",
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
-                                        }
+                                        StartupDashboardSkeleton()
                                     }
 
                                     is UiState.Error -> {
@@ -633,20 +637,208 @@ private fun MainAppShell(user: FirebaseUser) {
 }
 
 @Composable
+private fun StartupDashboardSkeleton() {
+    val pulseTransition = rememberInfiniteTransition(label = "startup_skeleton_pulse")
+    val pulseAlpha by pulseTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.78f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 850, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "skeleton_alpha"
+    )
+    val surfaceColor = MaterialTheme.colorScheme.surface
+    val blockColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.32f * pulseAlpha)
+    val borderColor = subtleCardBorderColor()
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        contentAlignment = Alignment.TopCenter
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .widthIn(max = 640.dp)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Split chips skeleton strip
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(84.dp, 92.dp, 72.dp, 78.dp).forEach { chipW ->
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = surfaceColor,
+                        border = BorderStroke(1.dp, borderColor),
+                        modifier = Modifier
+                            .width(chipW)
+                            .height(34.dp)
+                            .alpha(pulseAlpha)
+                    ) {}
+                }
+            }
+
+            // Sub-view switcher skeleton
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = surfaceColor,
+                border = BorderStroke(1.dp, borderColor),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .alpha(pulseAlpha)
+            ) {}
+
+            // Progress hero skeleton card
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = surfaceColor,
+                border = BorderStroke(1.dp, borderColor),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .width(150.dp)
+                                .height(16.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(blockColor)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .width(48.dp)
+                                .height(22.dp)
+                                .clip(RoundedCornerShape(99.dp))
+                                .background(blockColor)
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(9.dp)
+                            .clip(RoundedCornerShape(99.dp))
+                            .background(blockColor)
+                    )
+                }
+            }
+
+            // Two compact exercise card skeletons
+            repeat(2) {
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = surfaceColor,
+                    border = BorderStroke(1.dp, borderColor),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(blockColor)
+                            )
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(160.dp)
+                                        .height(15.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(blockColor)
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .width(110.dp)
+                                        .height(11.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(blockColor)
+                                )
+                            }
+                        }
+                        repeat(2) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(42.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(blockColor)
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(42.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(blockColor)
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .size(42.dp)
+                                        .clip(CircleShape)
+                                        .background(blockColor)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun FloatingPillBottomBar(
     selectedTab: MainTab,
     onSelectTab: (MainTab) -> Unit
 ) {
+    var entered by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { entered = true }
+
+    val entranceOffsetY by animateDpAsState(
+        targetValue = if (entered) 0.dp else 36.dp,
+        animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessLow),
+        label = "nav_bar_entrance_offset"
+    )
+    val entranceAlpha by animateFloatAsState(
+        targetValue = if (entered) 1f else 0f,
+        animationSpec = tween(durationMillis = 260),
+        label = "nav_bar_entrance_alpha"
+    )
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
+            .offset(y = entranceOffsetY)
+            .alpha(entranceAlpha)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center
     ) {
         Surface(
             shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
             border = BorderStroke(1.dp, subtleCardBorderColor()),
             tonalElevation = 6.dp,
             shadowElevation = 10.dp,
@@ -664,7 +856,7 @@ private fun FloatingPillBottomBar(
                 NAV_DESTINATIONS.forEach { dest ->
                     val selected = selectedTab == dest.tab
                     val pillColor by animateColorAsState(
-                        targetValue = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else Color.Transparent,
+                        targetValue = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.17f) else Color.Transparent,
                         animationSpec = tween(220),
                         label = "nav_pill_color"
                     )
@@ -675,8 +867,13 @@ private fun FloatingPillBottomBar(
                     )
                     val horizontalPad by animateDpAsState(
                         targetValue = if (selected) 14.dp else 8.dp,
-                        animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMedium),
+                        animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow),
                         label = "nav_pill_pad"
+                    )
+                    val indicatorWidth by animateDpAsState(
+                        targetValue = if (selected) 20.dp else 0.dp,
+                        animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow),
+                        label = "nav_indicator_width"
                     )
                     val interaction = remember { MutableInteractionSource() }
 
@@ -684,6 +881,7 @@ private fun FloatingPillBottomBar(
                         modifier = Modifier
                             .weight(1f)
                             .heightIn(min = 52.dp)
+                            .tactilePressScale(interaction, pressedScale = 0.95f)
                             .clip(RoundedCornerShape(22.dp))
                             .background(pillColor)
                             .clickable(
@@ -712,6 +910,13 @@ private fun FloatingPillBottomBar(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
+                            Box(
+                                modifier = Modifier
+                                    .width(indicatorWidth)
+                                    .height(2.5.dp)
+                                    .clip(RoundedCornerShape(99.dp))
+                                    .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
+                            )
                         }
                     }
                 }
@@ -739,12 +944,21 @@ private fun ActiveTabContent(
     viewModel: MainViewModel,
     onWorkoutFabVisibilityChange: (Boolean) -> Unit
 ) {
+    val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     AnimatedContent(
         targetState = tab,
         transitionSpec = {
-            fadeIn(tween(220)) togetherWith fadeOut(tween(160))
+            val forward = targetState.ordinal >= initialState.ordinal
+            val dir = if (forward) (if (isRtl) -1 else 1) else (if (isRtl) 1 else -1)
+            val enter = fadeIn(tween(240)) + slideInHorizontally(
+                animationSpec = spring(dampingRatio = 0.86f, stiffness = Spring.StiffnessMediumLow)
+            ) { fullWidth -> dir * (fullWidth / 10) }
+            val exit = fadeOut(tween(180)) + slideOutHorizontally(
+                animationSpec = tween(180)
+            ) { fullWidth -> -dir * (fullWidth / 10) }
+            enter togetherWith exit
         },
-        label = "main_tab_crossfade"
+        label = "main_tab_slide_fade"
     ) { activeTab ->
         when (activeTab) {
             MainTab.WORKOUT -> WorkoutScreen(

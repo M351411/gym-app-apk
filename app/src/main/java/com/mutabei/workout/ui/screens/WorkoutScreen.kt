@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -43,17 +44,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.FitnessCenter
+import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.NoteAlt
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.SelfImprovement
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -67,21 +72,24 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -89,6 +97,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mutabei.workout.R
@@ -96,7 +105,6 @@ import com.mutabei.workout.data.model.ExerciseSpec
 import com.mutabei.workout.data.model.HintLevel
 import com.mutabei.workout.data.model.SetEntry
 import com.mutabei.workout.data.model.WorkoutDefaults
-import com.mutabei.workout.data.model.shiftIsoDate
 import com.mutabei.workout.data.model.todayIso
 import com.mutabei.workout.ui.components.ConsistencyHeatmapCard
 import com.mutabei.workout.ui.components.DualLineProgressChart
@@ -108,8 +116,12 @@ import com.mutabei.workout.ui.components.PersonalRecordBadge
 import com.mutabei.workout.ui.components.PlateCalculatorDialog
 import com.mutabei.workout.ui.components.SetGoalTargetIcon
 import com.mutabei.workout.ui.components.StatusBadgePill
+import com.mutabei.workout.ui.components.WeeklyMuscleSetsCard
 import com.mutabei.workout.ui.components.WorkoutSessionSummaryCard
 import com.mutabei.workout.ui.components.WorkoutSessionTimerBar
+import com.mutabei.workout.ui.components.WorkoutSplitProgressHistoryCard
+import com.mutabei.workout.ui.components.WorkoutSubView
+import com.mutabei.workout.ui.components.WorkoutSubViewSwitcher
 import com.mutabei.workout.ui.components.computeDoubleProgression
 import com.mutabei.workout.ui.components.computeSetTargetGoal
 import com.mutabei.workout.ui.components.formatCounterLtr
@@ -122,8 +134,14 @@ import com.mutabei.workout.ui.viewmodel.AppDataSnapshot
 import com.mutabei.workout.ui.viewmodel.ExerciseHistoryPoint
 import com.mutabei.workout.ui.viewmodel.MainViewModel
 import com.mutabei.workout.ui.viewmodel.WorkoutSessionTimerState
-import kotlin.math.max
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
+
+private enum class ExerciseDrawerSection {
+    ALTERNATIVES,
+    TIP,
+    TOOLS
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -137,10 +155,12 @@ fun WorkoutScreen(
 ) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
+    val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val split = snapshot.config.effectiveSplit()
     val safeDayIdx = selectedDayIndex.coerceIn(0, (split.size - 1).coerceAtLeast(0))
     val today = todayIso()
     var plateCalcTarget by remember { mutableStateOf<Pair<String, Double>?>(null) }
+    var selectedSubView by rememberSaveable { mutableStateOf(WorkoutSubView.SESSION) }
 
     fun openYoutube(videoId: String) {
         try {
@@ -164,7 +184,7 @@ fun WorkoutScreen(
                 .fillMaxSize()
                 .widthIn(max = 640.dp)
         ) {
-            // Anchored Split Day Selector Chips (stays crisp while content slides underneath)
+            // 1. Anchored Muscle Split Selector Chips
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -202,263 +222,316 @@ fun WorkoutScreen(
                 }
             }
 
-            // Smooth horizontal slide + fade transition when switching muscle splits
+            // 2. Clean Sub-View Switcher: Session & Exercises vs Recovery & Log
+            WorkoutSubViewSwitcher(
+                selected = selectedSubView,
+                onSelect = { selectedSubView = it },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+            )
+
+            // 3. Coordinated RTL-aware directional slide + fade transition between sub-views & splits
             AnimatedContent(
-                targetState = safeDayIdx,
+                targetState = selectedSubView to safeDayIdx,
                 transitionSpec = {
-                    val forward = targetState >= initialState
+                    val forward = if (targetState.first != initialState.first) {
+                        targetState.first.ordinal >= initialState.first.ordinal
+                    } else {
+                        targetState.second >= initialState.second
+                    }
+                    val dir = if (forward) (if (isRtl) -1 else 1) else (if (isRtl) 1 else -1)
                     val slideIn = slideInHorizontally(
-                        animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow)
-                    ) { fullWidth -> if (forward) fullWidth / 5 else -fullWidth / 5 }
+                        animationSpec = spring(dampingRatio = 0.86f, stiffness = Spring.StiffnessMediumLow)
+                    ) { fullWidth -> dir * (fullWidth / 10) }
                     val slideOut = slideOutHorizontally(
-                        animationSpec = tween(220)
-                    ) { fullWidth -> if (forward) -fullWidth / 6 else fullWidth / 6 }
+                        animationSpec = tween(180)
+                    ) { fullWidth -> -dir * (fullWidth / 10) }
                     (fadeIn(tween(240)) + slideIn) togetherWith (fadeOut(tween(180)) + slideOut)
                 },
-                label = "workout_split_switch",
+                label = "workout_subview_split_switch",
                 modifier = Modifier.weight(1f)
-            ) { animatedDayIdx ->
+            ) { (activeSubView, animatedDayIdx) ->
                 val dayIdx = animatedDayIdx.coerceIn(0, (split.size - 1).coerceAtLeast(0))
                 val currentDay = split[dayIdx]
                 val sessionId = "${today}_$dayIdx"
                 val todaySession = snapshot.sessions[sessionId]
-                val listState = rememberLazyListState()
 
-                // Scroll-aware FAB visibility: hide while scrolling down, reappear when scrolling up or at top
-                LaunchedEffect(listState, dayIdx) {
-                    onFabVisibilityChange(true)
-                    var prevIndex = 0
-                    var prevOffset = 0
-                    snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
-                        .collect { (idx, offset) ->
-                            val atTop = idx == 0 && offset < 24
-                            val scrollingDown = idx > prevIndex || (idx == prevIndex && offset > prevOffset + 18)
-                            val scrollingUp = idx < prevIndex || (idx == prevIndex && offset < prevOffset - 18)
-                            when {
-                                atTop -> onFabVisibilityChange(true)
-                                scrollingDown -> onFabVisibilityChange(false)
-                                scrollingUp -> onFabVisibilityChange(true)
-                            }
-                            prevIndex = idx
-                            prevOffset = offset
+                when (activeSubView) {
+                    WorkoutSubView.SESSION -> {
+                        val listState = rememberLazyListState()
+                        val isScrolling by remember(listState) {
+                            derivedStateOf { listState.isScrollInProgress }
                         }
-                }
+                        LaunchedEffect(isScrolling, dayIdx) {
+                            if (isScrolling) {
+                                onFabVisibilityChange(false)
+                            } else {
+                                delay(180)
+                                onFabVisibilityChange(true)
+                            }
+                        }
 
-                // Live workout session progress computation
-                val totalPlannedSets = remember(currentDay) {
-                    currentDay.exercises.sumOf { it.workingSets }.coerceAtLeast(1)
-                }
-                val completedSets = remember(currentDay, todaySession, drafts, dayIdx, snapshot.config.alternatives) {
-                    currentDay.exercises.indices.sumOf { exIdx ->
-                        val spec = currentDay.exercises[exIdx]
-                        val altKey = "$dayIdx|$exIdx"
-                        val chosenName = snapshot.config.alternatives[altKey]?.ifBlank { spec.name } ?: spec.name
-                        val savedEx = todaySession?.exercises?.get(exIdx.toString())
-                        val savedSets = if (savedEx != null && savedEx.name == chosenName) savedEx.sets else null
-                        val activeSets = drafts[altKey] ?: savedSets ?: emptyList()
-                        activeSets.count { it.repsInt() > 0 }.coerceAtMost(spec.workingSets)
-                    }
-                }
+                        val totalPlannedSets = remember(currentDay) {
+                            currentDay.exercises.sumOf { it.workingSets }.coerceAtLeast(1)
+                        }
+                        val completedSets = remember(currentDay, todaySession, drafts, dayIdx, snapshot.config.alternatives) {
+                            currentDay.exercises.indices.sumOf { exIdx ->
+                                val spec = currentDay.exercises[exIdx]
+                                val altKey = "$dayIdx|$exIdx"
+                                val chosenName = snapshot.config.alternatives[altKey]?.ifBlank { spec.name } ?: spec.name
+                                val savedEx = todaySession?.exercises?.get(exIdx.toString())
+                                val savedSets = if (savedEx != null && savedEx.name == chosenName) savedEx.sets else null
+                                val activeSets = drafts[altKey] ?: savedSets ?: emptyList()
+                                activeSets.count { it.repsInt() > 0 }.coerceAtMost(spec.workingSets)
+                            }
+                        }
 
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 112.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    // Workout Session Progress Bar Card
-                    item(key = "session_progress_$dayIdx") {
-                        WorkoutSessionProgressCard(
-                            dayName = currentDay.name,
-                            completedSets = completedSets,
-                            totalPlannedSets = totalPlannedSets
-                        )
-                    }
+                        val restSec = snapshot.config.restSeconds
+                        val restSummary = remember(restSec) {
+                            val m = restSec / 60
+                            val s = restSec % 60
+                            if (s == 0) "${isolateLtr("$m")}د" else isolateLtr("$m:${s.toString().padStart(2, '0')}")
+                        }
 
-                    // Total Workout Session Timer
-                    item(key = "workout_session_timer") {
-                        WorkoutSessionTimerBar(
-                            state = workoutTimer,
-                            onToggle = viewModel::toggleWorkoutSessionTimer,
-                            onReset = viewModel::resetWorkoutSessionTimer
-                        )
-                    }
-
-                    // Live session summary & Tonnage card
-                    item(key = "session_summary_$dayIdx") {
-                        WorkoutSessionSummaryCard(
-                            dayName = currentDay.name,
-                            dayIndex = dayIdx,
-                            todaySession = todaySession,
-                            allSessions = snapshot.sessions
-                        )
-                    }
-
-                    // General warm-up accordion
-                    item(key = "general_warmup") {
-                        ExpandableSectionCard(
-                            title = "التسخين العام",
-                            subtitleEn = "General Warm-Up · < 10 min",
-                            statusBadgeText = "5 تمارين",
-                            leadingIcon = Icons.Rounded.SelfImprovement,
-                            testTag = "general_warmup_section"
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 104.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                WorkoutDefaults.GENERAL_WARMUPS.forEach { w ->
-                                    Surface(
-                                        shape = RoundedCornerShape(99.dp),
-                                        color = MaterialTheme.colorScheme.background,
-                                        border = BorderStroke(1.dp, subtleCardBorderColor()),
-                                        modifier = Modifier.clickable { openYoutube(w.youtubeId) }
+                            // Session progress strip
+                            item(key = "session_progress_$dayIdx") {
+                                WorkoutSessionProgressCard(
+                                    dayName = currentDay.name,
+                                    completedSets = completedSets,
+                                    totalPlannedSets = totalPlannedSets
+                                )
+                            }
+
+                            // Compact Workout Session Timer
+                            item(key = "workout_session_timer") {
+                                WorkoutSessionTimerBar(
+                                    state = workoutTimer,
+                                    onToggle = viewModel::toggleWorkoutSessionTimer,
+                                    onReset = viewModel::resetWorkoutSessionTimer
+                                )
+                            }
+
+                            // Live session summary & Tonnage card (auto-hides until >=1 set is logged)
+                            item(key = "session_summary_$dayIdx") {
+                                WorkoutSessionSummaryCard(
+                                    dayName = currentDay.name,
+                                    dayIndex = dayIdx,
+                                    todaySession = todaySession,
+                                    allSessions = snapshot.sessions
+                                )
+                            }
+
+                            // Compact Warm-Up toggle (collapsed by default)
+                            item(key = "general_warmup") {
+                                ExpandableSectionCard(
+                                    title = "التسخين العام",
+                                    subtitleEn = "General Warm-Up · < 10 min",
+                                    statusBadgeText = "${isolateLtr("5")} تمارين",
+                                    leadingIcon = Icons.Rounded.SelfImprovement,
+                                    initiallyExpanded = false,
+                                    testTag = "general_warmup_section"
+                                ) {
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.PlayArrow,
-                                                contentDescription = stringResource(R.string.cd_youtube),
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                            Spacer(Modifier.width(4.dp))
-                                            Text(w.title, style = MaterialTheme.typography.bodySmall)
+                                        WorkoutDefaults.GENERAL_WARMUPS.forEach { w ->
+                                            Surface(
+                                                shape = RoundedCornerShape(99.dp),
+                                                color = MaterialTheme.colorScheme.background,
+                                                border = BorderStroke(1.dp, subtleCardBorderColor()),
+                                                modifier = Modifier.clickable { openYoutube(w.youtubeId) }
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Rounded.PlayArrow,
+                                                        contentDescription = stringResource(R.string.cd_youtube),
+                                                        tint = MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                    Spacer(Modifier.width(4.dp))
+                                                    Text(w.title, style = MaterialTheme.typography.bodySmall)
+                                                }
+                                            }
                                         }
+                                    }
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        text = "${isolateLtr("10")} عدات لكل تمرين، حاول تتحسن في الرينج من غير ما تجهد نفسك.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            // Compact, scannable Exercise Cards
+                            itemsIndexed(
+                                items = currentDay.exercises,
+                                key = { idx, _ -> "${dayIdx}_$idx" }
+                            ) { exIdx, spec ->
+                                val altKey = "$dayIdx|$exIdx"
+                                val chosenName = snapshot.config.alternatives[altKey]?.ifBlank { spec.name } ?: spec.name
+                                val savedEx = todaySession?.exercises?.get(exIdx.toString())
+                                val savedSets = if (savedEx != null && savedEx.name == chosenName) savedEx.sets else null
+                                val defaultSets = savedSets ?: List(spec.workingSets) { SetEntry() }
+                                val activeSets = drafts[altKey] ?: defaultSets
+                                val history = remember(snapshot.sessions, chosenName) {
+                                    viewModel.exerciseHistory(snapshot.sessions, chosenName)
+                                }
+
+                                ExerciseCard(
+                                    dayIndex = dayIdx,
+                                    exIndex = exIdx,
+                                    spec = spec,
+                                    chosenName = chosenName,
+                                    restSummary = restSummary,
+                                    isSaved = savedSets != null,
+                                    sets = activeSets,
+                                    history = history,
+                                    onSelectAlternative = { alt ->
+                                        viewModel.selectExerciseAlternative(dayIdx, exIdx, alt)
+                                    },
+                                    onOpenYoutube = ::openYoutube,
+                                    onSetChanged = { setIdx, weight, reps ->
+                                        viewModel.updateDraftSet(
+                                            dayIndex = dayIdx,
+                                            exIndex = exIdx,
+                                            setIndex = setIdx,
+                                            setCount = spec.workingSets,
+                                            baseSets = activeSets,
+                                            weight = weight,
+                                            reps = reps
+                                        )
+                                    },
+                                    onQuickCompleteSet = { setIdx, fallbackWeight, fallbackReps ->
+                                        viewModel.quickCompleteSet(
+                                            dayIndex = dayIdx,
+                                            exIndex = exIdx,
+                                            setIndex = setIdx,
+                                            setCount = spec.workingSets,
+                                            exerciseName = chosenName,
+                                            baseSets = activeSets,
+                                            fallbackWeight = fallbackWeight,
+                                            fallbackReps = fallbackReps
+                                        )
+                                    },
+                                    onRepsDone = { viewModel.startRestTimer() },
+                                    onPrefillWeights = { lastSets, suggestedW ->
+                                        viewModel.prefillWeightsFromLastSession(
+                                            dayIndex = dayIdx,
+                                            exIndex = exIdx,
+                                            setCount = spec.workingSets,
+                                            lastSets = lastSets,
+                                            suggestedWeightKg = suggestedW
+                                        )
+                                    },
+                                    onOpenPlateCalc = { w -> plateCalcTarget = chosenName to w },
+                                    onShowToast = viewModel::showToast,
+                                    onSaveExercise = {
+                                        viewModel.saveExerciseLog(dayIdx, exIdx, chosenName, activeSets)
+                                    }
+                                )
+                            }
+
+                            // Session Note (collapsed by default)
+                            item(key = "session_note_$dayIdx") {
+                                var noteText by remember(sessionId, todaySession?.note) {
+                                    mutableStateOf(todaySession?.note.orEmpty())
+                                }
+                                ExpandableSectionCard(
+                                    title = "ملاحظة الجلسة",
+                                    subtitleEn = "Session Notes",
+                                    statusBadgeText = if (!todaySession?.note.isNullOrBlank()) "محفوظة ✓" else null,
+                                    statusBadgeColor = LocalSemanticColors.current.ok,
+                                    leadingIcon = Icons.Rounded.NoteAlt,
+                                    initiallyExpanded = false,
+                                    testTag = "session_note_section"
+                                ) {
+                                    OutlinedTextField(
+                                        value = noteText,
+                                        onValueChange = { noteText = it },
+                                        placeholder = { Text("نوم، إرهاق، ألم، أي حاجة تفتكرها") },
+                                        minLines = 3,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("session_note_input")
+                                    )
+                                    Spacer(Modifier.height(10.dp))
+                                    OutlinedButton(
+                                        onClick = {
+                                            viewModel.saveSessionNote(dayIdx, noteText)
+                                            viewModel.showToast("اتحفظت الملاحظة ✅")
+                                        },
+                                        modifier = Modifier.testTag("save_session_note_button")
+                                    ) {
+                                        Text("احفظ الملاحظة")
                                     }
                                 }
                             }
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                text = "10 عدات لكل تمرين، حاول تتحسن في الرينج من غير ما تجهد نفسك.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
 
-                    // Exercise cards
-                    itemsIndexed(
-                        items = currentDay.exercises,
-                        key = { idx, _ -> "${dayIdx}_$idx" }
-                    ) { exIdx, spec ->
-                        val altKey = "$dayIdx|$exIdx"
-                        val chosenName = snapshot.config.alternatives[altKey]?.ifBlank { spec.name } ?: spec.name
-                        val savedEx = todaySession?.exercises?.get(exIdx.toString())
-                        val savedSets = if (savedEx != null && savedEx.name == chosenName) savedEx.sets else null
-                        val defaultSets = savedSets ?: List(spec.workingSets) { SetEntry() }
-                        val activeSets = drafts[altKey] ?: defaultSets
-                        val history = remember(snapshot.sessions, chosenName) {
-                            viewModel.exerciseHistory(snapshot.sessions, chosenName)
-                        }
-
-                        ExerciseCard(
-                            dayIndex = dayIdx,
-                            exIndex = exIdx,
-                            spec = spec,
-                            chosenName = chosenName,
-                            isSaved = savedSets != null,
-                            sets = activeSets,
-                            history = history,
-                            onSelectAlternative = { alt ->
-                                viewModel.selectExerciseAlternative(dayIdx, exIdx, alt)
-                            },
-                            onOpenYoutube = ::openYoutube,
-                            onSetChanged = { setIdx, weight, reps ->
-                                viewModel.updateDraftSet(
-                                    dayIndex = dayIdx,
-                                    exIndex = exIdx,
-                                    setIndex = setIdx,
-                                    setCount = spec.workingSets,
-                                    baseSets = activeSets,
-                                    weight = weight,
-                                    reps = reps
+                            // Finish Workout Action Card
+                            item(key = "finish_workout_$dayIdx") {
+                                FinishWorkoutActionCard(
+                                    dayName = currentDay.name,
+                                    completedSets = completedSets,
+                                    totalPlannedSets = totalPlannedSets,
+                                    onFinishWorkout = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        if (workoutTimer.isRunning) {
+                                            viewModel.pauseWorkoutSessionTimer()
+                                        }
+                                        viewModel.dismissRestTimer()
+                                        viewModel.showToast(
+                                            "عاش يا بطل! أنهيت جلسة ${currentDay.name} (${isolateLtr("$completedSets / $totalPlannedSets")} مجموعة) 💪"
+                                        )
+                                    }
                                 )
-                            },
-                            onQuickCompleteSet = { setIdx, fallbackWeight, fallbackReps ->
-                                viewModel.quickCompleteSet(
-                                    dayIndex = dayIdx,
-                                    exIndex = exIdx,
-                                    setIndex = setIdx,
-                                    setCount = spec.workingSets,
-                                    exerciseName = chosenName,
-                                    baseSets = activeSets,
-                                    fallbackWeight = fallbackWeight,
-                                    fallbackReps = fallbackReps
-                                )
-                            },
-                            onRepsDone = { viewModel.startRestTimer() },
-                            onPrefillWeights = { lastSets, suggestedW ->
-                                viewModel.prefillWeightsFromLastSession(
-                                    dayIndex = dayIdx,
-                                    exIndex = exIdx,
-                                    setCount = spec.workingSets,
-                                    lastSets = lastSets,
-                                    suggestedWeightKg = suggestedW
-                                )
-                            },
-                            onOpenPlateCalc = { w -> plateCalcTarget = chosenName to w },
-                            onShowToast = viewModel::showToast,
-                            onSaveExercise = {
-                                viewModel.saveExerciseLog(dayIdx, exIdx, chosenName, activeSets)
-                            }
-                        )
-                    }
-
-                    // Session note
-                    item(key = "session_note_$dayIdx") {
-                        var noteText by remember(sessionId, todaySession?.note) {
-                            mutableStateOf(todaySession?.note.orEmpty())
-                        }
-                        ExpandableSectionCard(
-                            title = "ملاحظة الجلسة",
-                            subtitleEn = "Session Notes",
-                            statusBadgeText = if (!todaySession?.note.isNullOrBlank()) "محفوظة ✓" else null,
-                            statusBadgeColor = LocalSemanticColors.current.ok,
-                            leadingIcon = Icons.Rounded.NoteAlt,
-                            initiallyExpanded = !todaySession?.note.isNullOrBlank(),
-                            testTag = "session_note_section"
-                        ) {
-                            OutlinedTextField(
-                                value = noteText,
-                                onValueChange = { noteText = it },
-                                placeholder = { Text("نوم، إرهاق، ألم، أي حاجة تفتكرها") },
-                                minLines = 3,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("session_note_input")
-                            )
-                            Spacer(Modifier.height(10.dp))
-                            OutlinedButton(
-                                onClick = {
-                                    viewModel.saveSessionNote(dayIdx, noteText)
-                                    viewModel.showToast("اتحفظت الملاحظة ✅")
-                                },
-                                modifier = Modifier.testTag("save_session_note_button")
-                            ) {
-                                Text("احفظ الملاحظة")
                             }
                         }
                     }
 
-                    // Muscle Recovery Heatmap + Deload Detector
-                    item(key = "muscle_recovery_heatmap") {
-                        MuscleRecoveryHeatmapCard(snapshot = snapshot)
-                    }
-
-                    // 12-Week Consistency Heatmap + Streak
-                    item(key = "consistency_heatmap") {
+                    WorkoutSubView.RECOVERY_LOG -> {
+                        LaunchedEffect(Unit) {
+                            onFabVisibilityChange(false)
+                        }
+                        val recoveryListState = rememberLazyListState()
                         val proteinTarget = remember(snapshot.config, snapshot.bodyRecords) {
                             viewModel.computeTargets(snapshot.config, snapshot.bodyRecords)?.proteinG
                         }
-                        ConsistencyHeatmapCard(snapshot = snapshot, proteinTargetG = proteinTarget)
-                    }
 
-                    // Weekly muscle sets (last 7 days)
-                    item(key = "weekly_muscle_sets") {
-                        WeeklyMuscleSetsCard(snapshot = snapshot)
+                        LazyColumn(
+                            state = recoveryListState,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 104.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            item(key = "muscle_recovery_heatmap") {
+                                MuscleRecoveryHeatmapCard(snapshot = snapshot)
+                            }
+                            item(key = "weekly_muscle_sets") {
+                                WeeklyMuscleSetsCard(snapshot = snapshot)
+                            }
+                            item(key = "consistency_heatmap") {
+                                ConsistencyHeatmapCard(snapshot = snapshot, proteinTargetG = proteinTarget)
+                            }
+                            item(key = "split_progress_history_$dayIdx") {
+                                WorkoutSplitProgressHistoryCard(
+                                    dayName = currentDay.name,
+                                    dayIndex = dayIdx,
+                                    exercises = currentDay.exercises,
+                                    snapshot = snapshot,
+                                    viewModel = viewModel
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -536,6 +609,71 @@ private fun WorkoutSessionProgressCard(
     }
 }
 
+@Composable
+private fun FinishWorkoutActionCard(
+    dayName: String,
+    completedSets: Int,
+    totalPlannedSets: Int,
+    onFinishWorkout: () -> Unit
+) {
+    val semantic = LocalSemanticColors.current
+    val allDone = completedSets >= totalPlannedSets && totalPlannedSets > 0
+    val interaction = remember { MutableInteractionSource() }
+
+    Card(
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (allDone) semantic.ok.copy(alpha = 0.55f) else subtleCardBorderColor()
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = if (allDone) "الجلسة مكتملة!" else "إنهاء جلسة $dayName",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (allDone) semantic.ok else MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = formatCounterLtr("$completedSets", "$totalPlannedSets", "مجموعة مكتملة"),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Button(
+                onClick = onFinishWorkout,
+                interactionSource = interaction,
+                colors = if (allDone) {
+                    ButtonDefaults.buttonColors(containerColor = semantic.ok, contentColor = Color.White)
+                } else {
+                    ButtonDefaults.buttonColors()
+                },
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                modifier = Modifier
+                    .tactilePressScale(interaction)
+                    .testTag("finish_workout_session_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Flag,
+                    contentDescription = null,
+                    modifier = Modifier.size(17.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("إنهاء التمرين", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ExerciseCard(
@@ -543,6 +681,7 @@ private fun ExerciseCard(
     exIndex: Int,
     spec: ExerciseSpec,
     chosenName: String,
+    restSummary: String,
     isSaved: Boolean,
     sets: List<SetEntry>,
     history: List<ExerciseHistoryPoint>,
@@ -566,8 +705,8 @@ private fun ExerciseCard(
     val progressionAdvice = remember(spec, lastSession) { computeDoubleProgression(spec, lastSession) }
     val muscleKey = WorkoutDefaults.detectMuscleGroup(chosenName)
     val muscleLabel = WorkoutDefaults.MUSCLE_GROUPS[muscleKey]?.arabicLabel ?: "عضلة"
+    val alternatives = remember(spec) { spec.alternativesList() }
 
-    // Plateau warning: last 3 past sessions flat vs 4th-from-last
     val hasPlateau = remember(past) {
         if (past.size >= 4) {
             val e1s = past.map { it.topE1Rm() }
@@ -576,25 +715,30 @@ private fun ExerciseCard(
         } else false
     }
 
+    // Secondary details stay collapsed by default so every exercise card is crisp and scannable
+    var expandedDrawer by remember(chosenName) { mutableStateOf<ExerciseDrawerSection?>(null) }
     var warmupMessage by remember(chosenName) { mutableStateOf<String?>(null) }
-    var tipExpanded by remember(chosenName) { mutableStateOf(false) }
-    val tipChevronRotation by animateFloatAsState(
-        targetValue = if (tipExpanded) 180f else 0f,
-        animationSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow),
-        label = "tip_chevron"
-    )
     val saveInteraction = remember { MutableInteractionSource() }
 
     Card(
         shape = MaterialTheme.shapes.medium,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(if (isSaved) 1.5.dp else 1.dp, if (isSaved) semantic.ok.copy(alpha = 0.85f) else subtleCardBorderColor()),
+        border = BorderStroke(
+            width = if (isSaved) 1.5.dp else 1.dp,
+            color = if (isSaved) semantic.ok.copy(alpha = 0.85f) else subtleCardBorderColor()
+        ),
         modifier = Modifier
             .fillMaxWidth()
+            .animateContentSize(
+                animationSpec = spring(
+                    dampingRatio = 0.8f,
+                    stiffness = Spring.StiffnessMediumLow
+                )
+            )
             .testTag("exercise_card_${dayIndex}_$exIndex")
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // Header row
+            // 1. Clean Header Row (LTR-isolated exercise name + target muscle/sets/rest summary + rep range badge)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -602,11 +746,17 @@ private fun ExerciseCard(
             ) {
                 MuscleSilhouetteCanvas(muscleKey = muscleKey)
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
                         Text(
-                            text = chosenName,
+                            text = isolateLtr(chosenName),
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.ExtraBold
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                         if (isSaved) {
                             Icon(
@@ -621,9 +771,11 @@ private fun ExerciseCard(
                         }
                     }
                     Text(
-                        text = "$muscleLabel · ${spec.workingSets} مجموعات شغل · تسخين ${spec.warmupSets}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "$muscleLabel · ${isolateLtr("${spec.workingSets}")} مجموعات · راحة $restSummary",
+                        style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 Surface(
@@ -634,7 +786,7 @@ private fun ExerciseCard(
                     Text(
                         text = isolateLtr("${spec.minReps}–${spec.maxReps}"),
                         style = MaterialTheme.typography.titleMedium.copy(
-                            fontSize = 18.sp,
+                            fontSize = 17.sp,
                             fontFeatureSettings = "tnum"
                         ),
                         fontWeight = FontWeight.ExtraBold,
@@ -644,112 +796,7 @@ private fun ExerciseCard(
                 }
             }
 
-            // Alternatives + YouTube chips
-            Spacer(Modifier.height(10.dp))
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                spec.alternativesList().forEach { option ->
-                    val isSelected = option == chosenName
-                    val ytId = WorkoutDefaults.YOUTUBE_IDS[option]
-                    Surface(
-                        shape = RoundedCornerShape(99.dp),
-                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.background,
-                        border = BorderStroke(1.dp, if (isSelected) MaterialTheme.colorScheme.primary else subtleCardBorderColor())
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = option,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier
-                                    .clickable { onSelectAlternative(option) }
-                                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                            )
-                            if (ytId != null) {
-                                Box(
-                                    modifier = Modifier
-                                        .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f) else MaterialTheme.colorScheme.surface)
-                                        .clickable { onOpenYoutube(ytId) }
-                                        .padding(horizontal = 8.dp, vertical = 5.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.PlayArrow,
-                                        contentDescription = "شرح $option",
-                                        tint = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Compact Collapsible Exercise Tip Chip
-            if (spec.note.isNotBlank()) {
-                Spacer(Modifier.height(10.dp))
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.background,
-                    border = BorderStroke(1.dp, subtleCardBorderColor()),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .animateContentSize(
-                            animationSpec = spring(
-                                dampingRatio = 0.8f,
-                                stiffness = Spring.StiffnessMediumLow
-                            )
-                        )
-                        .testTag("exercise_tip_chip_${dayIndex}_$exIndex")
-                ) {
-                    Column {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { tipExpanded = !tipExpanded }
-                                .padding(horizontal = 12.dp, vertical = 9.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Lightbulb,
-                                contentDescription = null,
-                                tint = semantic.warn,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Text(
-                                text = "نصيحة الأداء",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Icon(
-                                imageVector = Icons.Rounded.ExpandMore,
-                                contentDescription = if (tipExpanded) "إخفاء النصيحة" else "عرض النصيحة",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier
-                                    .size(18.dp)
-                                    .rotate(tipChevronRotation)
-                            )
-                        }
-                        if (tipExpanded) {
-                            HorizontalDivider(color = subtleCardBorderColor())
-                            Text(
-                                text = spec.note,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Plateau warning
+            // Plateau warning (only shown if detected)
             if (hasPlateau) {
                 Spacer(Modifier.height(8.dp))
                 Row(
@@ -760,10 +807,12 @@ private fun ExerciseCard(
                         imageVector = Icons.Rounded.Warning,
                         contentDescription = null,
                         tint = semantic.warn,
-                        modifier = Modifier.size(16.dp).padding(top = 2.dp)
+                        modifier = Modifier
+                            .size(16.dp)
+                            .padding(top = 2.dp)
                     )
                     Text(
-                        text = "الوزن ثابت من 3 جلسات. جرّب تزوّد عدة أو وزن بشكل تدريجي، من غير ما تغيّر البرنامج قبل الـ12 أسبوع.",
+                        text = "الوزن ثابت من ${isolateLtr("3")} جلسات. جرّب تزوّد عدة أو وزن تدريجياً.",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
                         color = semantic.warn
@@ -771,48 +820,73 @@ private fun ExerciseCard(
                 }
             }
 
-            // Last session summary + 1-tap weight fill
+            // 2. Compact Last-Session Hint + Single "نسخ" Action
             if (lastSession != null) {
                 Spacer(Modifier.height(10.dp))
-                val summary = lastSession.sets.joinToString(" ، ") { s ->
-                    isolateLtr("${s.weight.ifBlank { "–" }}×${s.reps.ifBlank { "–" }}")
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                val summaryLtr = isolateLtr(
+                    lastSession.sets.joinToString(" • ") { s ->
+                        "${s.weight.ifBlank { "–" }}×${s.reps.ifBlank { "–" }}"
+                    }
+                )
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.background.copy(alpha = 0.72f),
+                    border = BorderStroke(1.dp, subtleCardBorderColor()),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = "آخر مرة (${lastSession.date}): $summary",
-                        style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Surface(
-                        shape = RoundedCornerShape(99.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                    Row(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(99.dp))
-                            .clickable {
-                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                val nextW = if (progressionAdvice?.readyToIncrease == true) progressionAdvice.suggestedWeightKg else null
-                                onPrefillWeights(lastSession.sets, nextW)
-                            }
-                            .testTag("prefill_weights_${dayIndex}_$exIndex")
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
-                            text = if (progressionAdvice?.readyToIncrease == true) "طبّق الوزن ↑" else "انسخ الأوزان",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        )
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = "آخر مرة • ${isolateLtr(lastSession.date)}",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = summaryLtr,
+                                style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(99.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(99.dp))
+                                .clickable {
+                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    val nextW = if (progressionAdvice?.readyToIncrease == true) progressionAdvice.suggestedWeightKg else null
+                                    onPrefillWeights(lastSession.sets, nextW)
+                                }
+                                .testTag("prefill_weights_${dayIndex}_$exIndex")
+                        ) {
+                            Text(
+                                text = if (progressionAdvice?.readyToIncrease == true) "رفع الوزن ↑" else "نسخ",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
                     }
                 }
             }
 
-            // Working sets rows (with last-session placeholders, 1-tap checkmark logging, emerald animation & goal target icon)
+            // 3. Unobstructed Working Set Rows (tabular كجم & عدات + 1-tap ✓ completion with emerald tint)
             Spacer(Modifier.height(10.dp))
             sets.forEachIndexed { setIdx, set ->
                 val repHint = WorkoutDefaults.repHint(set.reps, spec.minReps, spec.maxReps)
@@ -849,7 +923,7 @@ private fun ExerciseCard(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        text = "${setIdx + 1}",
+                        text = isolateLtr("${setIdx + 1}"),
                         style = MaterialTheme.typography.titleSmall.copy(fontFeatureSettings = "tnum"),
                         fontWeight = FontWeight.Bold,
                         color = if (isCompleted) semantic.ok else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -924,7 +998,6 @@ private fun ExerciseCard(
                             onShowToast("اضغط مطوّلاً على أيقونة الهدف لعرض هدف المجموعة ${setIdx + 1}")
                         }
                     )
-                    // 1-Tap Quick-Complete Set Button (✓)
                     Surface(
                         shape = CircleShape,
                         color = if (isCompleted) Color(0xFF22C55E) else MaterialTheme.colorScheme.background,
@@ -977,77 +1050,270 @@ private fun ExerciseCard(
                 }
             }
 
-            // Equalized Action Buttons Row (حاسبة التسخين | راحة | الطارات)
+            // 4. Compact On-Demand Secondary Controls Strip (Collapsed by Default!)
             Spacer(Modifier.height(10.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedButton(
+                if (alternatives.size > 1 || WorkoutDefaults.YOUTUBE_IDS[chosenName] != null) {
+                    ExerciseDrawerTogglePill(
+                        label = "البدائل",
+                        icon = Icons.Rounded.SwapHoriz,
+                        expanded = expandedDrawer == ExerciseDrawerSection.ALTERNATIVES,
+                        onClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            expandedDrawer = if (expandedDrawer == ExerciseDrawerSection.ALTERNATIVES) null else ExerciseDrawerSection.ALTERNATIVES
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("toggle_alternatives_${dayIndex}_$exIndex")
+                    )
+                }
+                if (spec.note.isNotBlank()) {
+                    ExerciseDrawerTogglePill(
+                        label = "نصيحة",
+                        icon = Icons.Rounded.Lightbulb,
+                        iconTint = semantic.warn,
+                        expanded = expandedDrawer == ExerciseDrawerSection.TIP,
+                        onClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            expandedDrawer = if (expandedDrawer == ExerciseDrawerSection.TIP) null else ExerciseDrawerSection.TIP
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("exercise_tip_chip_${dayIndex}_$exIndex")
+                    )
+                }
+                ExerciseDrawerTogglePill(
+                    label = "أدوات",
+                    icon = Icons.Rounded.Build,
+                    expanded = expandedDrawer == ExerciseDrawerSection.TOOLS,
                     onClick = {
-                        val baseW = sets.firstOrNull()?.weightDouble()?.takeIf { it > 0.0 }
-                            ?: lastSession?.topWeight()
-                            ?: 0.0
-                        warmupMessage = WorkoutDefaults.warmUpAdvice(spec.warmupSets, baseW)
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        expandedDrawer = if (expandedDrawer == ExerciseDrawerSection.TOOLS) null else ExerciseDrawerSection.TOOLS
                     },
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
                     modifier = Modifier
                         .weight(1f)
-                        .testTag("warmup_calc_${dayIndex}_$exIndex")
-                ) {
-                    Text(
-                        text = "حاسبة التسخين",
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                OutlinedButton(
-                    onClick = onRepsDone,
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("start_rest_${dayIndex}_$exIndex")
-                ) {
-                    Text(
-                        text = "⏱ راحة",
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                OutlinedButton(
-                    onClick = {
-                        val baseW = sets.firstOrNull()?.weightDouble()?.takeIf { it > 0.0 }
-                            ?: lastSession?.topWeight()
-                            ?: 60.0
-                        onOpenPlateCalc(baseW)
-                    },
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("plate_calc_${dayIndex}_$exIndex")
-                ) {
-                    Text(
-                        text = "⚖️ الطارات",
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-            if (!warmupMessage.isNullOrBlank()) {
-                Text(
-                    text = warmupMessage!!,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 6.dp)
+                        .testTag("toggle_tools_${dayIndex}_$exIndex")
                 )
             }
 
-            // Finish / Update Exercise button with tactile press scale
-            Spacer(Modifier.height(12.dp))
+            // 5. Expanded On-Demand Drawer Content
+            when (expandedDrawer) {
+                ExerciseDrawerSection.ALTERNATIVES -> {
+                    Spacer(Modifier.height(10.dp))
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.background,
+                        border = BorderStroke(1.dp, subtleCardBorderColor()),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(10.dp)
+                        ) {
+                            alternatives.forEach { option ->
+                                val isSelected = option == chosenName
+                                val ytId = WorkoutDefaults.YOUTUBE_IDS[option]
+                                Surface(
+                                    shape = RoundedCornerShape(99.dp),
+                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                                    border = BorderStroke(
+                                        width = if (isSelected) 1.5.dp else 1.dp,
+                                        color = if (isSelected) MaterialTheme.colorScheme.primary else subtleCardBorderColor()
+                                    ),
+                                    modifier = Modifier
+                                        .height(36.dp)
+                                        .clip(RoundedCornerShape(99.dp))
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxHeight()
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxHeight()
+                                                .clickable {
+                                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                    onSelectAlternative(option)
+                                                }
+                                                .padding(horizontal = 12.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = isolateLtr(option),
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        if (ytId != null) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxHeight()
+                                                    .background(
+                                                        if (isSelected) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.16f)
+                                                        else MaterialTheme.colorScheme.background
+                                                    )
+                                                    .clickable { onOpenYoutube(ytId) }
+                                                    .padding(horizontal = 10.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.PlayArrow,
+                                                    contentDescription = "شرح $option",
+                                                    tint = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ExerciseDrawerSection.TIP -> {
+                    Spacer(Modifier.height(10.dp))
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.background,
+                        border = BorderStroke(1.dp, subtleCardBorderColor()),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = spec.note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                        )
+                    }
+                }
+
+                ExerciseDrawerSection.TOOLS -> {
+                    Spacer(Modifier.height(10.dp))
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.background,
+                        border = BorderStroke(1.dp, subtleCardBorderColor()),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        val baseW = sets.firstOrNull()?.weightDouble()?.takeIf { it > 0.0 }
+                                            ?: lastSession?.topWeight()
+                                            ?: 0.0
+                                        warmupMessage = WorkoutDefaults.warmUpAdvice(spec.warmupSets, baseW)
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("warmup_calc_${dayIndex}_$exIndex")
+                                ) {
+                                    Text(
+                                        text = "حاسبة التسخين",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                OutlinedButton(
+                                    onClick = onRepsDone,
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("start_rest_${dayIndex}_$exIndex")
+                                ) {
+                                    Text(
+                                        text = "⏱ راحة",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        val baseW = sets.firstOrNull()?.weightDouble()?.takeIf { it > 0.0 }
+                                            ?: lastSession?.topWeight()
+                                            ?: 60.0
+                                        onOpenPlateCalc(baseW)
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("plate_calc_${dayIndex}_$exIndex")
+                                ) {
+                                    Text(
+                                        text = "⚖️ الطارات",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            if (!warmupMessage.isNullOrBlank()) {
+                                Text(
+                                    text = warmupMessage!!,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (history.isNotEmpty()) {
+                                HorizontalDivider(color = subtleCardBorderColor())
+                                val bestW = history.maxOfOrNull { it.topWeight() } ?: 0.0
+                                val bestE1 = history.maxOfOrNull { it.topE1Rm() } ?: 0.0
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.History,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = "أعلى وزن: ${isolateLtr(String.format("%.1f", bestW))} كجم · ${isolateLtr("1RM")}: ${isolateLtr("${bestE1.roundToInt()}")} كجم (${isolateLtr("${history.size}")} جلسة)",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                if (history.size >= 2) {
+                                    DualLineProgressChart(
+                                        primarySeries = history.map { it.topWeight() },
+                                        secondarySeries = history.map { it.topE1Rm() },
+                                        unitLabel = "كجم",
+                                        legendText = "أعلى وزن (أزرق) وتقدير 1RM (متقطع)"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                null -> Unit
+            }
+
+            // 6. Primary Save / Update Exercise CTA
+            Spacer(Modifier.height(10.dp))
             Button(
                 onClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -1060,125 +1326,79 @@ private fun ExerciseCard(
                     .testTag("finish_exercise_${dayIndex}_$exIndex")
             ) {
                 Text(
-                    text = if (isSaved) "حدّث التمرين" else "خلّصت التمرين",
+                    text = if (isSaved) "حدّث التمرين ✓" else "حفظ التمرين",
                     fontWeight = FontWeight.Bold
                 )
-            }
-
-            // Progress chart & History accordion
-            Spacer(Modifier.height(10.dp))
-            ExpandableSectionCard(
-                title = "التطور والسجل",
-                subtitleEn = "Progress & History",
-                statusBadgeText = "${history.size} جلسة",
-                leadingIcon = Icons.Rounded.History,
-                testTag = "exercise_history_${dayIndex}_$exIndex"
-            ) {
-                if (history.isEmpty()) {
-                    Text(
-                        text = "لسه مفيش جلسات متسجلة للتمرين ده.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    val bestW = history.maxOfOrNull { it.topWeight() } ?: 0.0
-                    val bestE1 = history.maxOfOrNull { it.topE1Rm() } ?: 0.0
-                    Text(
-                        text = "أعلى وزن: ${String.format("%.1f", bestW)} كجم · أفضل تقدير لأقصى وزن: ${bestE1.roundToInt()} كجم",
-                        style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    DualLineProgressChart(
-                        primarySeries = history.map { it.topWeight() },
-                        secondarySeries = history.map { it.topE1Rm() },
-                        unitLabel = "كجم",
-                        legendText = "الخط الأزرق أعلى وزن، المتقطع تقدير أقصى وزن"
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    history.reversed().take(12).forEach { pt ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(pt.date, style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"))
-                            Text(
-                                text = pt.sets.joinToString(" ، ") {
-                                    isolateLtr("${it.weight.ifBlank { "–" }}×${it.reps.ifBlank { "–" }}")
-                                },
-                                style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        HorizontalDivider(color = subtleCardBorderColor())
-                    }
-                }
             }
         }
     }
 }
 
 @Composable
-private fun WeeklyMuscleSetsCard(snapshot: AppDataSnapshot) {
-    val semantic = LocalSemanticColors.current
-    val today = todayIso()
-    val start7 = shiftIsoDate(today, -6)
-    val done = mutableMapOf<String, Int>()
-    val planned = mutableMapOf<String, Int>()
+private fun ExerciseDrawerTogglePill(
+    label: String,
+    icon: ImageVector,
+    expanded: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    iconTint: Color? = null
+) {
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow),
+        label = "drawer_pill_chevron"
+    )
+    val bgColor by animateColorAsState(
+        targetValue = if (expanded) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.background,
+        animationSpec = tween(200),
+        label = "drawer_pill_bg"
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (expanded) MaterialTheme.colorScheme.primary.copy(alpha = 0.55f) else subtleCardBorderColor(),
+        animationSpec = tween(200),
+        label = "drawer_pill_border"
+    )
 
-    snapshot.sessions.values.forEach { s ->
-        if (s.date in start7..today) {
-            s.exercises.values.forEach { ex ->
-                val g = WorkoutDefaults.detectMuscleGroup(ex.name)
-                val count = ex.sets.count { it.repsInt() > 0 }
-                done[g] = (done[g] ?: 0) + count
-            }
-        }
-    }
-    snapshot.config.effectiveSplit().forEach { day ->
-        day.exercises.forEach { ex ->
-            val g = WorkoutDefaults.detectMuscleGroup(ex.name)
-            planned[g] = (planned[g] ?: 0) + ex.workingSets
-        }
-    }
-
-    val totalDone = done.values.sum()
-    val totalPlanned = planned.values.sum().coerceAtLeast(1)
-
-    ExpandableSectionCard(
-        title = "المجموعات الأسبوعية لكل عضلة",
-        subtitleEn = "Weekly Volume · 7 Days",
-        statusBadgeText = formatCounterLtr("$totalDone", "$totalPlanned", "مجموعة"),
-        statusBadgeColor = if (totalDone >= totalPlanned) semantic.ok else MaterialTheme.colorScheme.primary,
-        leadingIcon = Icons.Rounded.FitnessCenter,
-        testTag = "weekly_muscle_sets_card"
+    Surface(
+        shape = RoundedCornerShape(11.dp),
+        color = bgColor,
+        border = BorderStroke(1.dp, borderColor),
+        modifier = modifier
+            .height(36.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .clickable(onClick = onClick)
     ) {
-        WorkoutDefaults.MUSCLE_GROUPS.entries
-            .filter { (k, _) -> (planned[k] ?: 0) > 0 || (done[k] ?: 0) > 0 }
-            .forEach { (k, meta) ->
-                val d = done[k] ?: 0
-                val p = planned[k] ?: 0
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(meta.arabicLabel, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                    Text(
-                        text = formatCounterLtr("$d", "$p", "مخطط"),
-                        style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum")
-                    )
-                }
-                Spacer(Modifier.height(4.dp))
-                MetricProgressBar(current = d.toDouble(), target = max(p, 1).toDouble())
-            }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = "بيحسب المجموعات اللي سجّلت فيها عدات بس. \"دراع\" بتشمل البايسبس والترايسبس. التوصيات العامة للتضخيم حوالي 10–20 مجموعة أسبوعيًا لكل عضلة.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (expanded) MaterialTheme.colorScheme.primary else (iconTint ?: MaterialTheme.colorScheme.onSurfaceVariant),
+                modifier = Modifier.size(15.dp)
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (expanded) FontWeight.Bold else FontWeight.Medium,
+                color = if (expanded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.width(2.dp))
+            Icon(
+                imageVector = Icons.Rounded.ExpandMore,
+                contentDescription = null,
+                tint = if (expanded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .size(15.dp)
+                    .rotate(chevronRotation)
+            )
+        }
     }
 }

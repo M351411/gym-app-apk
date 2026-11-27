@@ -13,10 +13,12 @@ import kotlin.math.roundToInt
 private const val TAG = "OpenFoodFactsRepo"
 
 class OpenFoodFactsRepository {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .build()
+    private val client: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .build()
+    }
 
     suspend fun lookupBarcode(barcodeDigits: String): AiLabelResult? = withContext(Dispatchers.IO) {
         val clean = barcodeDigits.filter { it.isDigit() }
