@@ -260,9 +260,32 @@ fun MuscleRecoveryHeatmapCard(snapshot: AppDataSnapshot) {
     }
 
     val (muscles, needsDeload, deloadMeta) = recoveryData
+    val readyPct = remember(muscles) {
+        if (muscles.isEmpty()) 100
+        else {
+            val totalScore = muscles.sumOf { (_, daysAgo, _) ->
+                when {
+                    daysAgo == null || daysAgo >= 2 -> 100
+                    daysAgo == 1 -> 55
+                    else -> 15
+                }
+            }
+            (totalScore.toDouble() / muscles.size).roundToInt().coerceIn(0, 100)
+        }
+    }
+    val (recoveryPillText, recoveryPillColor) = when {
+        needsDeload -> "إجهاد · Deload" to semantic.warn
+        readyPct >= 80 -> "جاهز $readyPct%" to semantic.ok
+        readyPct >= 50 -> "إجهاد متوسط" to semantic.warn
+        else -> "استشفاء $readyPct%" to semantic.low
+    }
 
     ExpandableSectionCard(
-        title = "خريطة استشفاء العضلات ومؤشر الـ Deload",
+        title = "خريطة استشفاء العضلات",
+        subtitleEn = "Muscle Recovery & Deload",
+        statusBadgeText = recoveryPillText,
+        statusBadgeColor = recoveryPillColor,
+        leadingIcon = Icons.Rounded.SelfImprovement,
         testTag = "muscle_recovery_heatmap_card"
     ) {
         if (needsDeload) {
@@ -403,7 +426,11 @@ fun ConsistencyHeatmapCard(
     val superCol = semantic.ok
 
     ExpandableSectionCard(
-        title = "تقويم الالتزام (آخر 12 أسبوع) · 🔥 $streak يوم",
+        title = "تقويم الالتزام",
+        subtitleEn = "12-Week Consistency",
+        statusBadgeText = "🔥 $streak يوم",
+        statusBadgeColor = if (streak >= 3) semantic.ok else semantic.warn,
+        leadingIcon = Icons.Rounded.LocalFireDepartment,
         testTag = "consistency_heatmap_card"
     ) {
         Row(

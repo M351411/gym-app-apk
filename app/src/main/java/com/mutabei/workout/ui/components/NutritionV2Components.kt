@@ -465,26 +465,37 @@ fun SmartNutritionStatusStrip(
             Surface(
                 shape = MaterialTheme.shapes.small,
                 color = accent.copy(alpha = 0.11f),
-                border = BorderStroke(1.dp, accent.copy(alpha = 0.4f)),
+                border = BorderStroke(1.dp, accent.copy(alpha = 0.38f)),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("workout_synced_nutrition_banner")
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.Top
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.FitnessCenter,
-                        contentDescription = null,
-                        tint = accent,
-                        modifier = Modifier.size(16.dp).padding(top = 2.dp)
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = accent.copy(alpha = 0.16f),
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Rounded.FitnessCenter,
+                                contentDescription = null,
+                                tint = accent,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         Text(
-                            text = "${workoutSync.dayType.badgeAr} (${workoutSync.workoutLabelAr})",
-                            style = MaterialTheme.typography.labelMedium,
+                            text = "${workoutSync.dayType.badgeAr} · ${workoutSync.workoutLabelAr}",
+                            style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Bold,
                             color = accent
                         )
@@ -513,34 +524,53 @@ fun SmartNutritionStatusStrip(
                     .testTag("rolling_calorie_budget_banner")
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.Top
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Balance,
-                        contentDescription = null,
-                        tint = accent,
-                        modifier = Modifier.size(16.dp).padding(top = 2.dp)
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = accent.copy(alpha = 0.16f),
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Rounded.Balance,
+                                contentDescription = null,
+                                tint = accent,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        // Row 1: Distinct card header (never collides with target numbers)
+                        Text(
+                            text = rollingBudget.badgeAr,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = accent
+                        )
+                        // Row 2: Distinct daily target pill row (no awkward parenthesis wrapping)
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = rollingBudget.badgeAr,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = accent
+                                text = "هدف اليوم: ${isolateLtr("${rollingBudget.adjustedTodayTarget}")} سعر",
+                                style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "هدف اليوم: ${rollingBudget.adjustedTodayTarget} (أساسي ${rollingBudget.baseDailyTarget})",
-                                style = MaterialTheme.typography.labelSmall,
+                                text = "الأساسي ${isolateLtr("${rollingBudget.baseDailyTarget}")}",
+                                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                        // Row 3: Concise explanation
                         Text(
                             text = rollingBudget.explanationAr,
                             style = MaterialTheme.typography.labelSmall,

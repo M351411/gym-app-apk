@@ -6,6 +6,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -394,7 +395,7 @@ fun WorkoutSessionTimerBar(
         ),
         border = BorderStroke(
             width = if (state.isRunning) 1.5.dp else 1.dp,
-            color = if (state.isRunning) semantic.ok.copy(alpha = 0.65f) else MaterialTheme.colorScheme.outline
+            color = if (state.isRunning) semantic.ok.copy(alpha = 0.65f) else subtleCardBorderColor()
         ),
         modifier = modifier
             .fillMaxWidth()
@@ -471,8 +472,10 @@ fun WorkoutSessionTimerBar(
                         )
                     }
                 }
+                val toggleInteraction = remember { MutableInteractionSource() }
                 Button(
                     onClick = onToggle,
+                    interactionSource = toggleInteraction,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (state.isRunning) {
                             MaterialTheme.colorScheme.surfaceVariant
@@ -485,8 +488,10 @@ fun WorkoutSessionTimerBar(
                             MaterialTheme.colorScheme.onPrimary
                         }
                     ),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    modifier = Modifier.testTag("workout_timer_toggle")
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                    modifier = Modifier
+                        .tactilePressScale(toggleInteraction)
+                        .testTag("workout_timer_toggle")
                 ) {
                     Icon(
                         imageVector = if (state.isRunning) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,

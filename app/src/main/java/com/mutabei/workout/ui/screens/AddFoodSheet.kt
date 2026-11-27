@@ -92,7 +92,7 @@ import com.mutabei.workout.ui.viewmodel.FoodSheetAiState
 import com.mutabei.workout.ui.viewmodel.MainViewModel
 import kotlin.math.roundToInt
 
-private enum class FoodSheetMode(val label: String) {
+enum class FoodSheetMode(val label: String) {
     SEARCH("بحث"),
     SUPPLEMENTS("مكملات وفيتامينات"),
     FAVORITES("مفضلة"),
@@ -117,6 +117,7 @@ private val SUPPLEMENT_MICRO_KEYS = listOf(
 @Composable
 fun AddFoodSheet(
     initialMealIndex: Int,
+    initialMode: FoodSheetMode? = null,
     snapshot: AppDataSnapshot,
     searchResults: List<FoodItem>,
     aiState: FoodSheetAiState,
@@ -124,9 +125,9 @@ fun AddFoodSheet(
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var mode by remember {
+    var mode by remember(initialMode, initialMealIndex) {
         mutableStateOf(
-            if (initialMealIndex == NutritionConstants.SUPPLEMENT_MEAL_INDEX) FoodSheetMode.SUPPLEMENTS
+            initialMode ?: if (initialMealIndex == NutritionConstants.SUPPLEMENT_MEAL_INDEX) FoodSheetMode.SUPPLEMENTS
             else FoodSheetMode.SEARCH
         )
     }

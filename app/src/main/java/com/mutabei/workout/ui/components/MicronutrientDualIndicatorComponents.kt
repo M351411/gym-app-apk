@@ -136,8 +136,8 @@ fun FatSolubleDualIndicatorCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    text = "${fmtMicro(eval.todayIntake, eval.unit)} / ${fmtMicro(eval.dailyTargetBase, eval.unit)} ${eval.unit}",
-                    style = MaterialTheme.typography.labelMedium,
+                    text = formatCounterLtr(fmtMicro(eval.todayIntake, eval.unit), fmtMicro(eval.dailyTargetBase, eval.unit), eval.unit),
+                    style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
                     fontWeight = FontWeight.SemiBold
                 )
             }
@@ -169,8 +169,8 @@ fun FatSolubleDualIndicatorCard(
                     color = reserveBarColor
                 )
                 Text(
-                    text = "${fmtMicro(eval.sevenDayTotal, eval.unit)} / ${fmtMicro(eval.weeklyTarget, eval.unit)} ${eval.unit}",
-                    style = MaterialTheme.typography.labelMedium,
+                    text = formatCounterLtr(fmtMicro(eval.sevenDayTotal, eval.unit), fmtMicro(eval.weeklyTarget, eval.unit), eval.unit),
+                    style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -251,7 +251,8 @@ fun DailyNutrientRow(
 ) {
     val semantic = LocalSemanticColors.current
     val unit = eval.unit
-    val valueText = "${fmtMicro(eval.todayIntake, unit)} / ${if (eval.isLimitKey) "حد " else ""}${fmtMicro(eval.dailyTarget, unit)} $unit"
+    val targetLabel = (if (eval.isLimitKey) "حد " else "") + fmtMicro(eval.dailyTarget, unit)
+    val valueText = formatCounterLtr(fmtMicro(eval.todayIntake, unit), targetLabel, unit)
 
     val barColor = when {
         eval.status == MicronutrientStatus.TOXICITY_WARNING -> semantic.low

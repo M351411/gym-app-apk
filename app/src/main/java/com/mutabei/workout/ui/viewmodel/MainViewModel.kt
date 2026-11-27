@@ -286,6 +286,9 @@ class MainViewModel(
     private val _timerFinishedEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val timerFinishedEvents: SharedFlow<Unit> = _timerFinishedEvents.asSharedFlow()
 
+    private val _timerPreAlertEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val timerPreAlertEvents: SharedFlow<Unit> = _timerPreAlertEvents.asSharedFlow()
+
     private val _toastMessages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val toastMessages: SharedFlow<String> = _toastMessages.asSharedFlow()
 
@@ -482,9 +485,14 @@ class MainViewModel(
     private fun runTimerLoop(endTimeMs: Long, totalSec: Int) {
         timerJob?.cancel()
         timerJob = viewModelScope.launch {
+            var preAlertFired = totalSec <= 5
             while (true) {
                 val left = ((endTimeMs - System.currentTimeMillis() + 999) / 1000L).toInt()
                 if (left > 0) {
+                    if (left == 5 && !preAlertFired) {
+                        preAlertFired = true
+                        _timerPreAlertEvents.tryEmit(Unit)
+                    }
                     _restTimer.value = RestTimerState(
                         visible = true,
                         totalSeconds = totalSec,
@@ -620,6 +628,49 @@ class MainViewModel(
         }
         _workoutDrafts.update { it + (key to filled) }
         showToast(if (suggestedStr != null) "تم ملء الوزن المقترح ($suggestedStr كجم) 💪" else "تم نسخ أوزان آخر جلسة ✅")
+    }
+
+    /**
+     * One-tap set completion: fills missing weight/reps from previous session fallback if blank,
+     * persists the exercise log immediately to Firestore, and starts the rest timer automatically.
+     */
+    fun quickCompleteSet(
+        dayIndex: Int,
+        exIndex: Int,
+        setIndex: Int,
+        setCount: Int,
+        exerciseName: String,
+        baseSets: List<SetEntry>,
+        fallbackWeight: String,
+        fallbackReps: String
+    ) {
+        startWorkoutSessionTimer(autoTriggered = true)
+        val key = "$dayIndex|$exIndex"
+        val updated = (_workoutDrafts.value[key] ?: baseSets).toMutableList()
+        while (updated.size < setCount) updated.add(SetEntry())
+        val current = updated[setIndex]
+        val finalWeight = current.weight.ifBlank { fallbackWeight }
+        val finalReps = current.reps.ifBlank { fallbackReps }
+        updated[setIndex] = current.copy(weight = finalWeight, reps = finalReps)
+        _workoutDrafts.update { it + (key to updated) }
+
+        startRestTimer()
+
+        val today = todayIso()
+        val snap = currentSnapshot()
+        val sessionId = "${today}_$dayIndex"
+        val existing = snap.sessions[sessionId] ?: WorkoutSession(
+            id = sessionId,
+            userId = currentUserId,
+            date = today,
+            dayIndex = dayIndex
+        )
+        val updatedSession = existing.copy(
+            exercises = existing.exercises + (exIndex.toString() to LoggedExercise(name = exerciseName, sets = updated))
+        )
+        viewModelScope.launch {
+            firestoreRepo.saveWorkoutSession(currentUserId, updatedSession)
+        }
     }
 
     fun saveExerciseLog(dayIndex: Int, exIndex: Int, exerciseName: String, sets: List<SetEntry>) {

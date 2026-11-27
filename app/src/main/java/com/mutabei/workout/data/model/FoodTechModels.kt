@@ -387,3 +387,194 @@ object ReverseMealBuilderEngine {
         return plans
     }
 }
+
+// ============================================================================
+// Smart Weekly Grocery List Generator ("قائمة المشتريات الأسبوعية")
+// ============================================================================
+
+enum class GroceryCategory(val labelAr: String, val emoji: String) {
+    PROTEIN("بروتين", "🥩"),
+    DAIRY("ألبان وبيض", "🥛"),
+    CARBS("كارب وحبوب", "🍚"),
+    HEALTHY_FATS("دهون صحية ومكسرات", "🥑")
+}
+
+data class GroceryListItem(
+    val id: String,
+    val name: String,
+    val category: GroceryCategory,
+    val weeklyGrams: Int,
+    val displayQtyAr: String,
+    val isFromUserHistory: Boolean
+)
+
+object WeeklyGroceryListEngine {
+
+    private fun classifyGroceryCategory(name: String, nutrients: List<Double>): GroceryCategory {
+        val lower = name.lowercase()
+        val isDairyOrEggs = listOf("جبن", "قريش", "زبادي", "لبن", "حليب", "بيض", "egg", "yogurt", "cheese", "milk")
+            .any { lower.contains(it) }
+        if (isDairyOrEggs) return GroceryCategory.DAIRY
+
+        val kcal = (nutrients.getOrNull(0) ?: 100.0).coerceAtLeast(1.0)
+        val p = (nutrients.getOrNull(NutritionConstants.NUTRIENT_INDEX["p"] ?: 1) ?: 0.0).coerceAtLeast(0.0)
+        val f = (nutrients.getOrNull(NutritionConstants.NUTRIENT_INDEX["f"] ?: 2) ?: 0.0).coerceAtLeast(0.0)
+        val c = (nutrients.getOrNull(NutritionConstants.NUTRIENT_INDEX["c"] ?: 3) ?: 0.0).coerceAtLeast(0.0)
+        val pShare = (p * 4.0) / kcal
+        val fShare = (f * 9.0) / kcal
+        val cShare = (c * 4.0) / kcal
+
+        return when {
+            pShare >= 0.30 || p >= 14.0 -> GroceryCategory.PROTEIN
+            fShare >= 0.48 -> GroceryCategory.HEALTHY_FATS
+            cShare >= 0.42 -> GroceryCategory.CARBS
+            else -> GroceryCategory.CARBS
+        }
+    }
+
+    private fun formatWeeklyQuantity(grams: Int): String {
+        val rounded = ((grams / 50.0).roundToInt() * 50).coerceAtLeast(100)
+        return if (rounded >= 1000) {
+            val kg = rounded / 1000.0
+            if (kg % 1.0 == 0.0) "${kg.toInt()} كجم" else "${String.format("%.1f", kg)} كجم"
+        } else {
+            "$rounded جم"
+        }
+    }
+
+    /**
+     * Aggregates recurring ingredients from the user's last 14 days of nutrition logs
+     * (projected to a 7-day shopping list) + favorite foods, with balanced Egyptian defaults
+     * if history is still sparse.
+     */
+    fun generate(
+        nutritionDays: Map<String, NutritionDay>,
+        customFoods: List<CustomFood>
+    ): List<GroceryListItem> {
+        val today = todayIso()
+        val cutoff = shiftIsoDate(today, -14)
+
+        data class Acc(val name: String, val nutrients: List<Double>, var totalGrams: Double, var occurrences: Int)
+        val map = linkedMapOf<String, Acc>()
+        val activeDays = nutritionDays.values.filter { it.date in cutoff..today && it.items.isNotEmpty() }
+
+        activeDays.forEach { day ->
+            day.items.forEach { item ->
+                if (item.mealIndex == NutritionConstants.SUPPLEMENT_MEAL_INDEX ||
+                    SupplementCatalog.isUnitBasedLoggedItem(item)
+                ) return@forEach
+                if ((item.nutrients.getOrNull(0) ?: 0.0) < 25.0) return@forEach
+                val key = item.name.trim().lowercase()
+                val existing = map[key]
+                if (existing != null) {
+                    existing.totalGrams += item.grams
+                    existing.occurrences++
+                } else {
+                    map[key] = Acc(
+                        name = item.name.trim(),
+                        nutrients = LoggedFoodItem.normalizeNutrients(item.nutrients),
+                        totalGrams = item.grams,
+                        occurrences = 1
+                    )
+                }
+            }
+        }
+
+        val scaleTo7Days = if (activeDays.isNotEmpty()) (7.0 / activeDays.size.coerceIn(1, 14)).coerceIn(0.5, 2.5) else 1.0
+        val out = mutableListOf<GroceryListItem>()
+        val seen = mutableSetOf<String>()
+
+        map.values
+            .sortedByDescending { it.occurrences * 1000.0 + it.totalGrams }
+            .take(14)
+            .forEach { acc ->
+                seen.add(acc.name.lowercase())
+                val weeklyG = (acc.totalGrams * scaleTo7Days).roundToInt().coerceIn(150, 5000)
+                out.add(
+                    GroceryListItem(
+                        id = "groc_${acc.name.hashCode()}",
+                        name = acc.name,
+                        category = classifyGroceryCategory(acc.name, acc.nutrients),
+                        weeklyGrams = weeklyG,
+                        displayQtyAr = formatWeeklyQuantity(weeklyG),
+                        isFromUserHistory = true
+                    )
+                )
+            }
+
+        // Fill with favorite custom foods if under 8 items
+        if (out.size < 8) {
+            customFoods.filter { it.favorite && !SupplementCatalog.isUnitBasedFood(it.toFoodItem()) }.forEach { cf ->
+                val fi = cf.toFoodItem()
+                if (fi.name.lowercase() !in seen && out.size < 12) {
+                    seen.add(fi.name.lowercase())
+                    out.add(
+                        GroceryListItem(
+                            id = "groc_fav_${fi.id}",
+                            name = fi.name,
+                            category = classifyGroceryCategory(fi.name, fi.nutrients),
+                            weeklyGrams = 500,
+                            displayQtyAr = "500 جم",
+                            isFromUserHistory = true
+                        )
+                    )
+                }
+            }
+        }
+
+        // Ensure every category has helpful Egyptian staples if history is sparse
+        val fallbackStaples = listOf(
+            Triple("صدور فراخ", GroceryCategory.PROTEIN, 1500),
+            Triple("تونة مصفاة", GroceryCategory.PROTEIN, 600),
+            Triple("جبنة قريش", GroceryCategory.DAIRY, 1000),
+            Triple("بيض (طبق)", GroceryCategory.DAIRY, 1000),
+            Triple("زبادي يوناني لايت", GroceryCategory.DAIRY, 700),
+            Triple("أرز أبيض / بسمتي", GroceryCategory.CARBS, 1000),
+            Triple("شوفان كامل", GroceryCategory.CARBS, 500),
+            Triple("عيش بلدي", GroceryCategory.CARBS, 700),
+            Triple("زيت زيتون بكر", GroceryCategory.HEALTHY_FATS, 250),
+            Triple("فول سوداني / زبدة سوداني", GroceryCategory.HEALTHY_FATS, 300)
+        )
+        if (out.size < 6) {
+            fallbackStaples.forEach { (name, cat, grams) ->
+                val key = name.take(6).lowercase()
+                if (seen.none { it.contains(key) }) {
+                    seen.add(name.lowercase())
+                    out.add(
+                        GroceryListItem(
+                            id = "groc_def_${name.hashCode()}",
+                            name = name,
+                            category = cat,
+                            weeklyGrams = grams,
+                            displayQtyAr = formatWeeklyQuantity(grams),
+                            isFromUserHistory = false
+                        )
+                    )
+                }
+            }
+        }
+
+        return out.sortedBy { it.category.ordinal }
+    }
+
+    fun formatShareText(items: List<GroceryListItem>, checkedIds: Set<String>): String {
+        val remaining = items.filterNot { it.id in checkedIds }
+        val listToShare = remaining.ifEmpty { items }
+        val grouped = listToShare.groupBy { it.category }
+        return buildString {
+            appendLine("🛒 قائمة مشتريات الأسبوع (متابعي):")
+            appendLine()
+            GroceryCategory.entries.forEach { cat ->
+                val catItems = grouped[cat].orEmpty()
+                if (catItems.isNotEmpty()) {
+                    appendLine("${cat.emoji} *${cat.labelAr}*:")
+                    catItems.forEach { item ->
+                        appendLine("⬜ ${item.name} — ${item.displayQtyAr}")
+                    }
+                    appendLine()
+                }
+            }
+        }.trim()
+    }
+}
+

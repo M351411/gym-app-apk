@@ -1,6 +1,8 @@
 package com.mutabei.workout.ui.components
 
+import android.content.Intent
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -10,9 +12,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddTask
 import androidx.compose.material.icons.rounded.AutoAwesome
@@ -20,9 +25,13 @@ import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Kitchen
 import androidx.compose.material.icons.rounded.Science
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.ShoppingCart
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -31,6 +40,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -39,16 +49,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.mutabei.workout.data.model.AiMacroTetrisResult
 import com.mutabei.workout.data.model.BuiltReverseMealItem
 import com.mutabei.workout.data.model.FoodIngredientAuditResult
 import com.mutabei.workout.data.model.FridgeIngredient
+import com.mutabei.workout.data.model.GroceryCategory
+import com.mutabei.workout.data.model.GroceryListItem
 import com.mutabei.workout.data.model.IngredientFlagSeverity
 import com.mutabei.workout.data.model.ReverseMealBuilderEngine
 import com.mutabei.workout.data.model.ReverseMealPlan
+import com.mutabei.workout.data.model.WeeklyGroceryListEngine
 import com.mutabei.workout.ui.theme.LocalSemanticColors
 import kotlin.math.roundToInt
 
@@ -299,6 +314,7 @@ fun ReverseMealBuilderCard(
     remCarbsG: Int,
     remFatG: Int,
     fridgePool: List<FridgeIngredient>,
+    groceryItems: List<GroceryListItem> = emptyList(),
     busyMessage: String?,
     errorMessage: String?,
     aiResult: AiMacroTetrisResult?,
@@ -308,7 +324,6 @@ fun ReverseMealBuilderCard(
     val semantic = LocalSemanticColors.current
     val selectedIds = remember(fridgePool) {
         mutableStateListOf<String>().apply {
-            // Pre-select all user habits + top 5 fridge staples so 1-tap solving works immediately
             val defaults = fridgePool.filter { it.isUserHabit }.ifEmpty { fridgePool.take(7) }
             addAll(defaults.map { it.id })
             fridgePool.filterNot { it.id in this }.take(4).forEach { add(it.id) }
@@ -318,11 +333,23 @@ fun ReverseMealBuilderCard(
     var instantPlans by remember(remKcal, remProteinG, remCarbsG, remFatG) {
         mutableStateOf<List<ReverseMealPlan>>(emptyList())
     }
+    var showGroceryDialog by remember { mutableStateOf(false) }
 
     val selectedPool = fridgePool.filter { it.id in selectedIds }
 
+    if (showGroceryDialog) {
+        WeeklyGroceryListDialog(
+            items = groceryItems,
+            onDismiss = { showGroceryDialog = false }
+        )
+    }
+
     ExpandableSectionCard(
-        title = "حاسبة باقي اليوم الذكية (Reverse Meal Builder)",
+        title = "حاسبة باقي اليوم الذكية",
+        subtitleEn = "Reverse Meal Builder",
+        statusBadgeText = if (remKcal >= 60 || remProteinG >= 8) "باقي $remKcal سعر" else "مكتمل ✓",
+        statusBadgeColor = if (remKcal >= 60 || remProteinG >= 8) MaterialTheme.colorScheme.primary else semantic.ok,
+        leadingIcon = Icons.Rounded.Kitchen,
         testTag = "macro_tetris_card"
     ) {
         Text(
@@ -429,6 +456,20 @@ fun ReverseMealBuilderCard(
             Icon(Icons.Rounded.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.size(6.dp))
             Text("صمّم وصفات مبتكرة من تلاجتي بـ Gemini")
+        }
+
+        if (groceryItems.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            OutlinedButton(
+                onClick = { showGroceryDialog = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("open_grocery_list_button")
+            ) {
+                Icon(Icons.Rounded.ShoppingCart, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.size(6.dp))
+                Text("قائمة المشتريات الأسبوعية (${groceryItems.size} أصناف)")
+            }
         }
 
         if (remKcal < 60 && remProteinG < 8) {
@@ -583,3 +624,141 @@ fun ReverseMealBuilderCard(
         }
     }
 }
+
+/**
+ * Categorized Weekly Grocery Checklist Dialog with one-tap WhatsApp / Share Intent.
+ */
+@Composable
+fun WeeklyGroceryListDialog(
+    items: List<GroceryListItem>,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val semantic = LocalSemanticColors.current
+    val checkedIds = remember(items) { mutableStateListOf<String>() }
+    val grouped = remember(items) { items.groupBy { it.category } }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.ShoppingCart,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Column {
+                    Text(
+                        text = "قائمة المشتريات الأسبوعية",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    Text(
+                        text = "مبنية من وجباتك المتكررة في آخر أسبوعين",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                GroceryCategory.entries.forEach { cat ->
+                    val catItems = grouped[cat].orEmpty()
+                    if (catItems.isNotEmpty()) {
+                        Surface(
+                            shape = MaterialTheme.shapes.small,
+                            color = MaterialTheme.colorScheme.background,
+                            border = BorderStroke(1.dp, subtleCardBorderColor()),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = "${cat.emoji} ${cat.labelAr}",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                catItems.forEach { item ->
+                                    val isChecked = item.id in checkedIds
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                if (isChecked) checkedIds.remove(item.id) else checkedIds.add(item.id)
+                                            }
+                                            .padding(vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Checkbox(
+                                                checked = isChecked,
+                                                onCheckedChange = {
+                                                    if (isChecked) checkedIds.remove(item.id) else checkedIds.add(item.id)
+                                                }
+                                            )
+                                            Text(
+                                                text = item.name,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                textDecoration = if (isChecked) TextDecoration.LineThrough else null,
+                                                color = if (isChecked) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                        Text(
+                                            text = item.displayQtyAr,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isChecked) MaterialTheme.colorScheme.onSurfaceVariant else semantic.ok
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val shareText = WeeklyGroceryListEngine.formatShareText(items, checkedIds.toSet())
+                    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, shareText)
+                    }
+                    try {
+                        context.startActivity(Intent.createChooser(sendIntent, "مشاركة قائمة المشتريات"))
+                    } catch (_: Exception) {
+                        // ignore if no share target
+                    }
+                },
+                modifier = Modifier.testTag("share_grocery_list_button")
+            ) {
+                Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.size(6.dp))
+                Text("مشاركة القائمة")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("إغلاق") }
+        }
+    )
+}
+

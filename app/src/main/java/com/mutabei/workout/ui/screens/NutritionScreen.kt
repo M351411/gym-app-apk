@@ -1,7 +1,17 @@
 package com.mutabei.workout.ui.screens
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,19 +23,28 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AddCircleOutline
+import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Insights
+import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.material.icons.rounded.QrCodeScanner
+import androidx.compose.material.icons.rounded.Science
 import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.WaterDrop
 import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -43,7 +62,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -53,11 +71,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mutabei.workout.R
 import com.mutabei.workout.data.model.CookingYieldEngine
 import com.mutabei.workout.data.model.FoodItem
@@ -71,6 +98,7 @@ import com.mutabei.workout.data.model.NutritionTargets
 import com.mutabei.workout.data.model.ReverseMealBuilderEngine
 import com.mutabei.workout.data.model.RollingCalorieBudgetEngine
 import com.mutabei.workout.data.model.SupplementCatalog
+import com.mutabei.workout.data.model.WeeklyGroceryListEngine
 import com.mutabei.workout.data.model.WorkoutSyncedNutritionEngine
 import com.mutabei.workout.data.model.daysBetweenIso
 import com.mutabei.workout.data.model.shiftIsoDate
@@ -78,6 +106,7 @@ import com.mutabei.workout.data.model.todayIso
 import com.mutabei.workout.data.repository.NutrientFoodSuggestion
 import com.mutabei.workout.ui.components.AdaptiveTdeeSection
 import com.mutabei.workout.ui.components.AiDeficiencyFixerBlock
+import com.mutabei.workout.ui.components.AnimatedCalorieRing
 import com.mutabei.workout.ui.components.DailyNutrientRow
 import com.mutabei.workout.ui.components.ExpandableSectionCard
 import com.mutabei.workout.ui.components.FatSolubleDualIndicatorCard
@@ -89,15 +118,21 @@ import com.mutabei.workout.ui.components.RawCookedToggleBar
 import com.mutabei.workout.ui.components.ReverseMealBuilderCard
 import com.mutabei.workout.ui.components.SaveMealPresetDialog
 import com.mutabei.workout.ui.components.SmartNutritionStatusStrip
+import com.mutabei.workout.ui.components.StatusBadgePill
 import com.mutabei.workout.ui.components.SupplementSynergyCard
 import com.mutabei.workout.ui.components.computeAdaptiveTdee
 import com.mutabei.workout.ui.components.computeMealLeucineStatus
+import com.mutabei.workout.ui.components.formatCounterLtr
+import com.mutabei.workout.ui.components.isolateLtr
+import com.mutabei.workout.ui.components.subtleCardBorderColor
+import com.mutabei.workout.ui.components.tactilePressScale
 import com.mutabei.workout.ui.theme.LocalSemanticColors
 import com.mutabei.workout.ui.viewmodel.AiDeficiencyUiState
 import com.mutabei.workout.ui.viewmodel.AiMacroTetrisUiState
 import com.mutabei.workout.ui.viewmodel.AppDataSnapshot
 import com.mutabei.workout.ui.viewmodel.FoodSheetAiState
 import com.mutabei.workout.ui.viewmodel.MainViewModel
+import java.util.Calendar
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -167,6 +202,13 @@ fun NutritionScreen(
         )
     }
 
+    val groceryItems = remember(snapshot.nutritionDays, snapshot.customFoods) {
+        WeeklyGroceryListEngine.generate(
+            nutritionDays = snapshot.nutritionDays,
+            customFoods = snapshot.customFoods
+        )
+    }
+
     // Daily totals across all tracked nutrient keys
     val totals = remember(day.items) {
         val count = NutritionConstants.NUTRIENT_COUNT
@@ -193,7 +235,19 @@ fun NutritionScreen(
         return totals.second[idx]
     }
 
+    fun smartDefaultMealIndex(): Int {
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        return when {
+            hour < 11 -> 0
+            hour < 17 -> 1
+            hour < 22 -> 2
+            else -> 3
+        }
+    }
+
+    val haptics = LocalHapticFeedback.current
     var addSheetMealIndex by remember { mutableStateOf<Int?>(null) }
+    var addSheetInitialMode by remember { mutableStateOf<FoodSheetMode?>(null) }
     var editingItem by remember { mutableStateOf<LoggedFoodItem?>(null) }
     var savingPresetMeal by remember { mutableStateOf<Pair<String, List<LoggedFoodItem>>?>(null) }
     var showFoodBattle by remember { mutableStateOf(false) }
@@ -205,17 +259,17 @@ fun NutritionScreen(
                 .fillMaxSize()
                 .widthIn(max = 640.dp),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Summary + Date switcher + Water card
+            // Summary + Date switcher + Animated Calorie Ring + Water card
             item(key = "nutrition_summary") {
                 Card(
                     shape = MaterialTheme.shapes.medium,
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    border = BorderStroke(1.dp, subtleCardBorderColor()),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
+                    Column(modifier = Modifier.padding(16.dp)) {
                         val yesterday = shiftIsoDate(today, -1)
                         val dateTitle = when (selectedDate) {
                             today -> "النهارده"
@@ -265,117 +319,226 @@ fun NutritionScreen(
                             )
                         }
 
-                        val kcal = totalOf("kcal")
-                        if (effectiveTargets != null) {
-                            val rem = effectiveTargets.kcal - kcal
-                            val overColor = if (rollingBudgetEnabled) semantic.warn else semantic.low
-                            Row(
-                                verticalAlignment = Alignment.Bottom,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = Modifier.padding(vertical = 4.dp)
-                            ) {
-                                Text(
-                                    text = "${abs(rem).roundToInt()}",
-                                    style = MaterialTheme.typography.displaySmall,
-                                    color = if (rem < 0) overColor else MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "سعر ${if (rem >= 0) "فاضلين" else "زيادة"} من ${effectiveTargets.kcal}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(bottom = 6.dp)
-                                )
-                            }
-                            MetricProgressBar(
-                                current = kcal,
-                                target = effectiveTargets.kcal.toDouble(),
-                                barColor = if (rem < 0) overColor else MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(Modifier.height(10.dp))
-                            listOf(
-                                Triple("p", "بروتين", effectiveTargets.proteinG),
-                                Triple("c", "كارب", effectiveTargets.carbsG),
-                                Triple("f", "دهون", effectiveTargets.fatG)
-                            ).forEach { (k, label, goalG) ->
-                                val cur = totalOf(k)
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(label, style = MaterialTheme.typography.bodyMedium)
-                                    Text("${cur.roundToInt()} / $goalG جم", style = MaterialTheme.typography.bodyMedium)
-                                }
-                                Spacer(Modifier.height(3.dp))
-                                MetricProgressBar(current = cur, target = goalG.coerceAtLeast(1).toDouble())
-                            }
-                            if (workoutSync != null || rollingBudget != null) {
-                                Spacer(Modifier.height(10.dp))
-                                SmartNutritionStatusStrip(
-                                    workoutSync = workoutSync,
-                                    rollingBudget = rollingBudget
-                                )
-                            }
-                        } else {
-                            Text(
-                                text = "${kcal.roundToInt()} سعر",
-                                style = MaterialTheme.typography.displaySmall
-                            )
-                            Text(
-                                text = "اكتب وزنك في \"الأهداف والبيانات\" تحت عشان يحسبلك الأهداف، أو سجّل قياس في تاب الجسم.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = semantic.warn,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(vertical = 4.dp)
-                            )
-                            Text(
-                                text = "بروتين ${totalOf("p").roundToInt()} · كارب ${totalOf("c").roundToInt()} · دهون ${totalOf("f").roundToInt()}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        Spacer(Modifier.height(6.dp))
+                        // Fluid AnimatedContent transition when switching between Today / Yesterday / other dates
+                        AnimatedContent(
+                            targetState = selectedDate,
+                            transitionSpec = {
+                                val newer = targetState >= initialState
+                                val slideIn = slideInHorizontally(
+                                    animationSpec = spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow)
+                                ) { w -> if (newer) -w / 6 else w / 6 }
+                                val slideOut = slideOutHorizontally(tween(180)) { w -> if (newer) w / 7 else -w / 7 }
+                                (fadeIn(tween(220)) + slideIn) togetherWith (fadeOut(tween(160)) + slideOut)
+                            },
+                            label = "nutrition_date_summary"
+                        ) { _ ->
+                            Column {
+                                val kcal = totalOf("kcal")
+                                if (effectiveTargets != null) {
+                                    val rem = effectiveTargets.kcal - kcal
+                                    val overColor = if (rollingBudgetEnabled) semantic.warn else semantic.low
+                                    val ringColor = if (rem < 0) overColor else MaterialTheme.colorScheme.primary
+                                    val pct = if (effectiveTargets.kcal > 0) {
+                                        ((kcal / effectiveTargets.kcal) * 100.0).roundToInt().coerceAtLeast(0)
+                                    } else 0
 
-                        // Water tracker
-                        val waterTarget = targets?.let { ((it.weightKg * 35.0) / 100.0).roundToInt() * 100 } ?: 2500
-                        Spacer(Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("ماء", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                            Text("${day.waterMl} / $waterTarget مل", style = MaterialTheme.typography.bodyMedium)
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        MetricProgressBar(
-                            current = day.waterMl.toDouble(),
-                            target = waterTarget.toDouble(),
-                            barColor = semantic.ok
-                        )
-                        val foodWaterMl = totalOf("wat").roundToInt()
-                        if (foodWaterMl > 0) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = "+ $foodWaterMl مل رطوبة من الأكل (الإجمالي ${day.waterMl + foodWaterMl} مل)",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(
-                                onClick = { viewModel.adjustWater(250) },
-                                modifier = Modifier.testTag("water_add_250")
-                            ) { Text("+250") }
-                            OutlinedButton(
-                                onClick = { viewModel.adjustWater(500) },
-                                modifier = Modifier.testTag("water_add_500")
-                            ) { Text("+500") }
-                            OutlinedButton(
-                                onClick = { viewModel.adjustWater(-250) },
-                                modifier = Modifier.testTag("water_sub_250")
-                            ) { Text("−250") }
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                                    ) {
+                                        AnimatedCalorieRing(
+                                            consumedKcal = kcal,
+                                            targetKcal = effectiveTargets.kcal,
+                                            ringColor = ringColor,
+                                            isOver = rem < 0,
+                                            size = 114.dp
+                                        )
+                                        Column(
+                                            modifier = Modifier.weight(1f),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "السعرات اليومية",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Text(
+                                                text = formatCounterLtr("${kcal.roundToInt()}", "${effectiveTargets.kcal}", "سعر"),
+                                                style = MaterialTheme.typography.titleLarge.copy(
+                                                    fontSize = 22.sp,
+                                                    fontFeatureSettings = "tnum"
+                                                ),
+                                                fontWeight = FontWeight.Black,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            StatusBadgePill(
+                                                text = if (rem < 0) {
+                                                    "زيادة ${isolateLtr("${abs(rem).roundToInt()}")} سعر · ${isolateLtr("$pct%")}"
+                                                } else {
+                                                    "تم استهلاك ${isolateLtr("$pct%")}"
+                                                },
+                                                accentColor = if (rem < 0) overColor else semantic.ok
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(Modifier.height(10.dp))
+                                    listOf(
+                                        Triple("p", "بروتين", effectiveTargets.proteinG),
+                                        Triple("c", "كارب", effectiveTargets.carbsG),
+                                        Triple("f", "دهون", effectiveTargets.fatG)
+                                    ).forEach { (k, label, goalG) ->
+                                        val cur = totalOf(k)
+                                        val macroColor = when (k) {
+                                            "p" -> semantic.ok
+                                            "c" -> MaterialTheme.colorScheme.primary
+                                            else -> semantic.warn
+                                        }
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                                            Text(
+                                                text = formatCounterLtr("${cur.roundToInt()}", "$goalG", "جم"),
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                        Spacer(Modifier.height(4.dp))
+                                        MetricProgressBar(
+                                            current = cur,
+                                            target = goalG.coerceAtLeast(1).toDouble(),
+                                            barColor = macroColor
+                                        )
+                                    }
+                                    if (workoutSync != null || rollingBudget != null) {
+                                        Spacer(Modifier.height(12.dp))
+                                        SmartNutritionStatusStrip(
+                                            workoutSync = workoutSync,
+                                            rollingBudget = rollingBudget
+                                        )
+                                    }
+                                } else {
+                                    Text(
+                                        text = "${isolateLtr("${kcal.roundToInt()}")} سعر",
+                                        style = MaterialTheme.typography.displaySmall.copy(fontFeatureSettings = "tnum"),
+                                        fontWeight = FontWeight.Black
+                                    )
+                                    Text(
+                                        text = "اكتب وزنك في \"الأهداف والبيانات\" تحت عشان يحسبلك الأهداف، أو سجّل قياس في تاب الجسم.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = semantic.warn,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(vertical = 4.dp)
+                                    )
+                                    Text(
+                                        text = "بروتين ${totalOf("p").roundToInt()} · كارب ${totalOf("c").roundToInt()} · دهون ${totalOf("f").roundToInt()}",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+
+                                // Water tracker
+                                val waterTarget = targets?.let { ((it.weightKg * 35.0) / 100.0).roundToInt() * 100 } ?: 2500
+                                Spacer(Modifier.height(14.dp))
+                                HorizontalDivider(color = subtleCardBorderColor())
+                                Spacer(Modifier.height(12.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.WaterDrop,
+                                            contentDescription = null,
+                                            tint = semantic.ok,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Text("الماء", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                                    }
+                                    Text(
+                                        text = formatCounterLtr("${day.waterMl}", "$waterTarget", "مل"),
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Spacer(Modifier.height(6.dp))
+                                MetricProgressBar(
+                                    current = day.waterMl.toDouble(),
+                                    target = waterTarget.toDouble(),
+                                    barColor = semantic.ok
+                                )
+                                val foodWaterMl = totalOf("wat").roundToInt()
+                                if (foodWaterMl > 0) {
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        text = "+ $foodWaterMl مل رطوبة من الأكل (الإجمالي ${day.waterMl + foodWaterMl} مل)",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Spacer(Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            viewModel.adjustWater(250)
+                                        },
+                                        modifier = Modifier.weight(1f).testTag("water_add_250")
+                                    ) { Text("+250", maxLines = 1) }
+                                    OutlinedButton(
+                                        onClick = {
+                                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            viewModel.adjustWater(500)
+                                        },
+                                        modifier = Modifier.weight(1f).testTag("water_add_500")
+                                    ) { Text("+500", maxLines = 1) }
+                                    OutlinedButton(
+                                        onClick = {
+                                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            viewModel.adjustWater(-250)
+                                        },
+                                        modifier = Modifier.weight(1f).testTag("water_sub_250")
+                                    ) { Text("−250", maxLines = 1) }
+                                }
+                            }
                         }
                     }
                 }
+            }
+
+            // Quick-Log Action Bar (AI Meal Photo | Barcode Scanner | Quick Search Add)
+            item(key = "quick_log_bar") {
+                QuickLogActionBar(
+                    onPhotoClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        addSheetInitialMode = FoodSheetMode.MEAL_PHOTO
+                        addSheetMealIndex = smartDefaultMealIndex()
+                    },
+                    onBarcodeClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        addSheetInitialMode = FoodSheetMode.BARCODE
+                        addSheetMealIndex = smartDefaultMealIndex()
+                    },
+                    onQuickAddClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        addSheetInitialMode = FoodSheetMode.SEARCH
+                        addSheetMealIndex = smartDefaultMealIndex()
+                    }
+                )
             }
 
             // 4 Meals + Supplements & Vitamins cards
@@ -391,11 +554,11 @@ fun NutritionScreen(
                     border = BorderStroke(
                         1.dp,
                         if (isSupplementSection) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
-                        else MaterialTheme.colorScheme.outline
+                        else subtleCardBorderColor()
                     ),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
+                    Column(modifier = Modifier.padding(16.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -514,10 +677,17 @@ fun NutritionScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            val addInteraction = remember { MutableInteractionSource() }
                             Button(
-                                onClick = { addSheetMealIndex = mealIdx },
+                                onClick = {
+                                    addSheetInitialMode = null
+                                    addSheetMealIndex = mealIdx
+                                },
+                                interactionSource = addInteraction,
                                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                                modifier = Modifier.testTag("add_food_meal_$mealIdx")
+                                modifier = Modifier
+                                    .tactilePressScale(addInteraction)
+                                    .testTag("add_food_meal_$mealIdx")
                             ) {
                                 Icon(Icons.Rounded.Add, contentDescription = null)
                                 Text(if (isSupplementSection) "أضف مكمل / فيتامين" else "أضف")
@@ -574,6 +744,7 @@ fun NutritionScreen(
                         remCarbsG = remC,
                         remFatG = remF,
                         fridgePool = fridgePool,
+                        groceryItems = groceryItems,
                         busyMessage = macroTetrisAi.busyMessage,
                         errorMessage = macroTetrisAi.errorMessage,
                         aiResult = macroTetrisAi.result,
@@ -606,8 +777,35 @@ fun NutritionScreen(
                         NutritionConstants.MICRO_GROUP_OTHER
                     allTracked.count { !hasDataFor(it) }
                 }
+                val topLowMicroLabels = remember(microReport) {
+                    val shortMap = mapOf(
+                        "vA" to "Vit A", "vD" to "Vit D", "vE" to "Vit E", "vK" to "Vit K",
+                        "vC" to "Vit C", "b1" to "B1", "b2" to "B2", "b3" to "B3", "b5" to "B5",
+                        "b6" to "B6", "fol" to "Folate", "b12" to "B12",
+                        "ca" to "Ca", "fe" to "Fe", "mg" to "Mg", "pM" to "P",
+                        "k" to "K", "zn" to "Zn", "cu" to "Cu", "mn" to "Mn", "se" to "Se"
+                    )
+                    val candidates = mutableListOf<Pair<String, Double>>()
+                    microReport.fatSoluble.forEach { fs ->
+                        if (fs.status == MicronutrientStatus.NEEDS_TOP_UP && fs.weeklyPercentage < 70.0) {
+                            candidates.add((shortMap[fs.key] ?: fs.key) to fs.weeklyPercentage)
+                        }
+                    }
+                    microReport.dailyByKey.values.forEach { d ->
+                        if (!d.isLimitKey && d.dailyPercentage < 70.0 && d.key != "na") {
+                            candidates.add((shortMap[d.key] ?: d.key) to d.dailyPercentage)
+                        }
+                    }
+                    candidates.sortedBy { it.second }.take(2).map { it.first }
+                }
                 ExpandableSectionCard(
-                    title = "الميكروز النهارده (تفصيل كامل للبالغين)",
+                    title = "الميكروز النهارده",
+                    subtitleEn = "Daily & 7-Day Rolling Pool",
+                    statusBadgeText = if (topLowMicroLabels.isNotEmpty()) {
+                        "ناقص: ${isolateLtr(topLowMicroLabels.joinToString(", "))}"
+                    } else "ممتاز ✓",
+                    statusBadgeColor = if (topLowMicroLabels.isNotEmpty()) semantic.warn else semantic.ok,
+                    leadingIcon = Icons.Rounded.Science,
                     testTag = "daily_micros_card"
                 ) {
                     if (day.items.isNotEmpty() && (missingMicroCount > 0 || enrichMicrosBusy != null)) {
@@ -735,8 +933,12 @@ fun NutritionScreen(
                                     style = MaterialTheme.typography.bodySmall
                                 )
                                 Text(
-                                    text = "$formattedVal / ${if (isLim) "حد " else ""}$targetVal $unit",
-                                    style = MaterialTheme.typography.bodySmall
+                                    text = if (isLim) {
+                                        "حد ${formatCounterLtr("$formattedVal", "$targetVal", unit)}"
+                                    } else {
+                                        formatCounterLtr("$formattedVal", "$targetVal", unit)
+                                    },
+                                    style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum")
                                 )
                             }
                             Spacer(Modifier.height(3.dp))
@@ -829,12 +1031,14 @@ fun NutritionScreen(
     if (addSheetMealIndex != null) {
         AddFoodSheet(
             initialMealIndex = addSheetMealIndex!!,
+            initialMode = addSheetInitialMode,
             snapshot = snapshot,
             searchResults = searchResults,
             aiState = aiState,
             viewModel = viewModel,
             onDismiss = {
                 addSheetMealIndex = null
+                addSheetInitialMode = null
                 viewModel.clearFoodSheetAi()
             }
         )
@@ -858,6 +1062,115 @@ fun NutritionScreen(
                 editingItem = null
             }
         )
+    }
+}
+
+@Composable
+private fun QuickLogActionBar(
+    onPhotoClick: () -> Unit,
+    onBarcodeClick: () -> Unit,
+    onQuickAddClick: () -> Unit
+) {
+    val semantic = LocalSemanticColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("nutrition_quick_log_bar"),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        QuickLogActionCard(
+            title = "تصوير وجبة",
+            subtitle = "AI Vision",
+            icon = Icons.Rounded.CameraAlt,
+            accentColor = MaterialTheme.colorScheme.primary,
+            testTag = "quick_log_ai_photo",
+            onClick = onPhotoClick,
+            modifier = Modifier.weight(1f)
+        )
+        QuickLogActionCard(
+            title = "باركود",
+            subtitle = "Scan",
+            icon = Icons.Rounded.QrCodeScanner,
+            accentColor = semantic.ok,
+            testTag = "quick_log_barcode",
+            onClick = onBarcodeClick,
+            modifier = Modifier.weight(1f)
+        )
+        QuickLogActionCard(
+            title = "إضافة سريعة",
+            subtitle = "Search",
+            icon = Icons.Rounded.AddCircleOutline,
+            accentColor = semantic.warn,
+            testTag = "quick_log_search",
+            onClick = onQuickAddClick,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun QuickLogActionCard(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    accentColor: Color,
+    testTag: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val interaction = remember { MutableInteractionSource() }
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, subtleCardBorderColor()),
+        modifier = modifier
+            .heightIn(min = 78.dp)
+            .tactilePressScale(interaction)
+            .clip(MaterialTheme.shapes.medium)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                onClick = onClick
+            )
+            .testTag(testTag)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = accentColor.copy(alpha = 0.14f),
+                modifier = Modifier.size(34.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = title,
+                        tint = accentColor,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = isolateLtr(subtitle),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+        }
     }
 }
 
@@ -1010,6 +1323,9 @@ private fun NutritionGoalsCard(
 
     ExpandableSectionCard(
         title = "الأهداف والبيانات",
+        subtitleEn = "Targets & Smart Engines",
+        statusBadgeText = targets?.let { "${it.kcal} سعر" },
+        leadingIcon = Icons.Rounded.Tune,
         testTag = "nutrition_goals_card"
     ) {
         // Sex selector
@@ -1195,7 +1511,11 @@ private fun WeeklyReviewCard(
     }
 
     ExpandableSectionCard(
-        title = "مراجعة أسبوعية وحرقك الفعلي (Adaptive TDEE)",
+        title = "حرقك الفعلي والمراجعة الأسبوعية",
+        subtitleEn = "Adaptive TDEE",
+        statusBadgeText = adaptiveTdee?.let { "${it.actualTdee} سعر" } ?: "قيد الحساب",
+        statusBadgeColor = if (adaptiveTdee != null) semantic.ok else MaterialTheme.colorScheme.primary,
+        leadingIcon = Icons.Rounded.LocalFireDepartment,
         testTag = "weekly_review_card"
     ) {
         AdaptiveTdeeSection(
@@ -1341,7 +1661,15 @@ private fun WeeklyMicrosCard(
     }
 
     ExpandableSectionCard(
-        title = "الميكروز: متوسط الأسبوع واقتراحات",
+        title = "الميكروز: متوسط الأسبوع",
+        subtitleEn = "7-Day Average & AI Fixer",
+        statusBadgeText = when {
+            days.size < 3 -> "قيد التجميع"
+            lowThree.isNotEmpty() -> "${lowThree.size} عناصر ناقصة"
+            else -> "متوازن ✓"
+        },
+        statusBadgeColor = if (lowThree.isNotEmpty()) semantic.warn else semantic.ok,
+        leadingIcon = Icons.Rounded.Insights,
         testTag = "weekly_micros_card"
     ) {
         if (days.size < 3) {

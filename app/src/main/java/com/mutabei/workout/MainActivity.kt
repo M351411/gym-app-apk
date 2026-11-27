@@ -15,9 +15,22 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -27,9 +40,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -44,8 +60,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
@@ -67,13 +81,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -97,6 +115,8 @@ import com.mutabei.workout.data.repository.OpenFoodFactsRepository
 import com.mutabei.workout.ui.components.RestTimerFab
 import com.mutabei.workout.ui.components.RestTimerOverlay
 import com.mutabei.workout.ui.components.formatWorkoutElapsed
+import com.mutabei.workout.ui.components.isolateLtr
+import com.mutabei.workout.ui.components.subtleCardBorderColor
 import com.mutabei.workout.ui.screens.AiCoachHubSheet
 import com.mutabei.workout.ui.screens.AuthScreen
 import com.mutabei.workout.ui.screens.BodyScreen
@@ -183,6 +203,7 @@ private val NAV_DESTINATIONS = listOf(
 @Composable
 private fun MainAppShell(user: FirebaseUser) {
     val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
     val viewModel: MainViewModel = viewModel(
         key = user.uid,
         factory = viewModelFactory {
@@ -225,13 +246,24 @@ private fun MainAppShell(user: FirebaseUser) {
     val snackbarHostState = remember { SnackbarHostState() }
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showCoachDialog by remember { mutableStateOf(false) }
+    var workoutFabVisible by remember { mutableStateOf(true) }
 
     val snapshot = (dataState as? UiState.Success)?.data
     val themeMode = snapshot?.config?.themeMode ?: "system"
 
+    LaunchedEffect(selectedTab) {
+        workoutFabVisible = true
+    }
+
     LaunchedEffect(viewModel) {
         viewModel.toastMessages.collect { msg ->
             snackbarHostState.showSnackbar(msg)
+        }
+    }
+
+    LaunchedEffect(viewModel) {
+        viewModel.timerPreAlertEvents.collect {
+            triggerTimerPreAlertFeedback(context)
         }
     }
 
@@ -270,7 +302,10 @@ private fun MainAppShell(user: FirebaseUser) {
                             NAV_DESTINATIONS.forEach { dest ->
                                 NavigationRailItem(
                                     selected = selectedTab == dest.tab,
-                                    onClick = { viewModel.selectTab(dest.tab) },
+                                    onClick = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        viewModel.selectTab(dest.tab)
+                                    },
                                     icon = {
                                         Icon(
                                             imageVector = dest.icon,
@@ -292,224 +327,261 @@ private fun MainAppShell(user: FirebaseUser) {
                                 SnackbarHost(hostState = snackbarHostState)
                             }
                         },
-                    topBar = {
-                        TopAppBar(
-                            colors = TopAppBarDefaults.topAppBarColors(
-                                containerColor = MaterialTheme.colorScheme.background,
-                                titleContentColor = MaterialTheme.colorScheme.onBackground
-                            ),
-                            title = {
-                                Column {
-                                    Text(
-                                        text = stringResource(R.string.app_header_title),
-                                        style = MaterialTheme.typography.titleLarge
-                                    )
-                                    if (snapshot != null) {
-                                        val week = viewModel.computeWeekNumber(snapshot.config.startDate)
-                                        val weekLabel = if (week <= 12) "الأسبوع $week من 12" else "خلصت الـ12 أسبوع!"
+                        topBar = {
+                            TopAppBar(
+                                colors = TopAppBarDefaults.topAppBarColors(
+                                    containerColor = MaterialTheme.colorScheme.background,
+                                    titleContentColor = MaterialTheme.colorScheme.onBackground
+                                ),
+                                title = {
+                                    // Minimal sleek single-row header with compact week pill badge
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
                                         Text(
-                                            text = "$weekLabel · ${stringResource(R.string.synced_status)}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            text = stringResource(R.string.app_header_title),
+                                            style = MaterialTheme.typography.titleLarge,
+                                            fontWeight = FontWeight.Black,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
-                                    }
-                                }
-                            },
-                            actions = {
-                                if (snapshot != null && workoutTimer.hasStarted) {
-                                    val timerAccent = if (workoutTimer.isRunning) semantic.ok else semantic.warn
-                                    Surface(
-                                        shape = RoundedCornerShape(99.dp),
-                                        color = timerAccent.copy(alpha = 0.14f),
-                                        border = BorderStroke(1.dp, timerAccent.copy(alpha = 0.6f)),
-                                        modifier = Modifier
-                                            .padding(end = 4.dp)
-                                            .clip(RoundedCornerShape(99.dp))
-                                            .clickable {
-                                                if (selectedTab != MainTab.WORKOUT) {
-                                                    viewModel.selectTab(MainTab.WORKOUT)
-                                                } else {
-                                                    viewModel.toggleWorkoutSessionTimer()
+                                        if (snapshot != null) {
+                                            val week = viewModel.computeWeekNumber(snapshot.config.startDate)
+                                            val pillLabel = if (week <= 12) "أسبوع ${isolateLtr("$week/12")}" else "✓ 12/12"
+                                            Surface(
+                                                shape = RoundedCornerShape(999.dp),
+                                                color = MaterialTheme.colorScheme.surface,
+                                                border = BorderStroke(1.dp, subtleCardBorderColor())
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                                                ) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(6.dp)
+                                                            .clip(CircleShape)
+                                                            .background(if (isOnline) semantic.ok else semantic.warn)
+                                                    )
+                                                    Text(
+                                                        text = pillLabel,
+                                                        style = MaterialTheme.typography.labelSmall.copy(
+                                                            fontFeatureSettings = "tnum"
+                                                        ),
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        maxLines = 1
+                                                    )
                                                 }
                                             }
-                                            .testTag("topbar_workout_timer_pill")
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(7.dp)
-                                                    .clip(CircleShape)
-                                                    .background(timerAccent)
-                                            )
-                                            Text(
-                                                text = formatWorkoutElapsed(workoutTimer.elapsedSeconds),
-                                                style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
-                                                fontWeight = FontWeight.ExtraBold,
-                                                color = timerAccent
-                                            )
                                         }
                                     }
-                                }
-                                if (snapshot != null) {
-                                    IconButton(
-                                        onClick = { showCoachDialog = true },
-                                        modifier = Modifier.testTag("ai_coach_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.AutoAwesome,
-                                            contentDescription = "المدرب الذكي الشامل",
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    }
-                                }
-                                IconButton(
-                                    onClick = { showSettingsSheet = true },
-                                    modifier = Modifier.testTag("settings_button")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Settings,
-                                        contentDescription = stringResource(R.string.cd_settings)
-                                    )
-                                }
-                            }
-                        )
-                    },
-                    bottomBar = {
-                        if (!useRail) {
-                            NavigationBar(
-                                containerColor = MaterialTheme.colorScheme.surface
-                            ) {
-                                NAV_DESTINATIONS.forEach { dest ->
-                                    NavigationBarItem(
-                                        selected = selectedTab == dest.tab,
-                                        onClick = { viewModel.selectTab(dest.tab) },
-                                        icon = {
-                                            Icon(
-                                                imageVector = dest.icon,
-                                                contentDescription = stringResource(dest.labelRes)
-                                            )
-                                        },
-                                        label = { Text(stringResource(dest.labelRes)) },
-                                        modifier = Modifier.testTag(dest.tag)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                ) { innerPadding ->
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding)
-                    ) {
-                        Column(modifier = Modifier.fillMaxSize()) {
-                            if (!isOnline) {
-                                Surface(
-                                    color = semantic.warn,
-                                    contentColor = MaterialTheme.colorScheme.onTertiary,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        text = stringResource(R.string.offline_banner),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                                    )
-                                }
-                            }
-
-                            when (val st = dataState) {
-                                UiState.Loading -> {
-                                    Box(
-                                        modifier = Modifier.fillMaxSize(),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Column(
-                                            horizontalAlignment = Alignment.CenterHorizontally,
-                                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                                },
+                                actions = {
+                                    if (snapshot != null && workoutTimer.hasStarted) {
+                                        val timerAccent = if (workoutTimer.isRunning) semantic.ok else semantic.warn
+                                        Surface(
+                                            shape = RoundedCornerShape(99.dp),
+                                            color = timerAccent.copy(alpha = 0.14f),
+                                            border = BorderStroke(1.dp, timerAccent.copy(alpha = 0.6f)),
+                                            modifier = Modifier
+                                                .padding(end = 4.dp)
+                                                .clip(RoundedCornerShape(99.dp))
+                                                .clickable {
+                                                    if (selectedTab != MainTab.WORKOUT) {
+                                                        viewModel.selectTab(MainTab.WORKOUT)
+                                                    } else {
+                                                        viewModel.toggleWorkoutSessionTimer()
+                                                    }
+                                                }
+                                                .testTag("topbar_workout_timer_pill")
                                         ) {
-                                            CircularProgressIndicator()
-                                            Text(
-                                                text = "جاري تحميل بياناتك...",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                }
-
-                                is UiState.Error -> {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(24.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Column(
-                                            horizontalAlignment = Alignment.CenterHorizontally,
-                                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                            Text(
-                                                text = st.message,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = MaterialTheme.colorScheme.error,
-                                                textAlign = TextAlign.Center
-                                            )
-                                            Button(onClick = { showSettingsSheet = true }) {
-                                                Text("فتح الإعدادات")
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(7.dp)
+                                                        .clip(CircleShape)
+                                                        .background(timerAccent)
+                                                )
+                                                Text(
+                                                    text = formatWorkoutElapsed(workoutTimer.elapsedSeconds),
+                                                    style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    color = timerAccent
+                                                )
                                             }
                                         }
                                     }
+                                    if (snapshot != null) {
+                                        IconButton(
+                                            onClick = { showCoachDialog = true },
+                                            modifier = Modifier.testTag("ai_coach_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.AutoAwesome,
+                                                contentDescription = "المدرب الذكي الشامل",
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                    IconButton(
+                                        onClick = { showSettingsSheet = true },
+                                        modifier = Modifier.testTag("settings_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Settings,
+                                            contentDescription = stringResource(R.string.cd_settings)
+                                        )
+                                    }
                                 }
-
-                                is UiState.Success -> {
-                                    ActiveTabContent(
-                                        tab = selectedTab,
-                                        snapshot = st.data,
-                                        selectedDayIndex = selectedDayIndex,
-                                        selectedNutritionDate = selectedNutritionDate,
-                                        workoutDrafts = workoutDrafts,
-                                        workoutTimer = workoutTimer,
-                                        searchResults = searchResults,
-                                        foodSheetAi = foodSheetAi,
-                                        bodyDraft = bodyDraft,
-                                        microSuggestions = microSuggestions,
-                                        deficiencyAi = deficiencyAi,
-                                        macroTetrisAi = macroTetrisAi,
-                                        battleResultsA = battleResultsA,
-                                        battleResultsB = battleResultsB,
-                                        viewModel = viewModel
-                                    )
-                                }
+                            )
+                        },
+                        bottomBar = {
+                            if (!useRail) {
+                                FloatingPillBottomBar(
+                                    selectedTab = selectedTab,
+                                    onSelectTab = { tab ->
+                                        if (tab != selectedTab) {
+                                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            viewModel.selectTab(tab)
+                                        }
+                                    }
+                                )
                             }
                         }
+                    ) { innerPadding ->
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(innerPadding)
+                        ) {
+                            Column(modifier = Modifier.fillMaxSize()) {
+                                if (!isOnline) {
+                                    Surface(
+                                        color = semantic.warn,
+                                        contentColor = MaterialTheme.colorScheme.onTertiary,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.offline_banner),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                                        )
+                                    }
+                                }
 
-                        // Floating Rest Timer Overlay / FAB
-                        if (snapshot != null) {
-                            if (restTimer.visible) {
-                                RestTimerOverlay(
-                                    state = restTimer,
-                                    defaultPresetSeconds = snapshot.config.restSeconds,
-                                    onAdjust = viewModel::adjustRestTimer,
-                                    onSelectPreset = viewModel::selectRestPreset,
-                                    onDismiss = viewModel::dismissRestTimer,
-                                    modifier = Modifier.align(Alignment.BottomCenter)
-                                )
-                            } else if (selectedTab == MainTab.WORKOUT) {
-                                RestTimerFab(
-                                    onClick = { viewModel.startRestTimer() },
-                                    modifier = Modifier
-                                        .align(Alignment.BottomStart)
-                                        .padding(16.dp)
-                                )
+                                when (val st = dataState) {
+                                    UiState.Loading -> {
+                                        Box(
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Column(
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                                            ) {
+                                                CircularProgressIndicator()
+                                                Text(
+                                                    text = "جاري تحميل بياناتك...",
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    is UiState.Error -> {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .padding(24.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Column(
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                                            ) {
+                                                Text(
+                                                    text = st.message,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    color = MaterialTheme.colorScheme.error,
+                                                    textAlign = TextAlign.Center
+                                                )
+                                                Button(onClick = { showSettingsSheet = true }) {
+                                                    Text("فتح الإعدادات")
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    is UiState.Success -> {
+                                        ActiveTabContent(
+                                            tab = selectedTab,
+                                            snapshot = st.data,
+                                            selectedDayIndex = selectedDayIndex,
+                                            selectedNutritionDate = selectedNutritionDate,
+                                            workoutDrafts = workoutDrafts,
+                                            workoutTimer = workoutTimer,
+                                            searchResults = searchResults,
+                                            foodSheetAi = foodSheetAi,
+                                            bodyDraft = bodyDraft,
+                                            microSuggestions = microSuggestions,
+                                            deficiencyAi = deficiencyAi,
+                                            macroTetrisAi = macroTetrisAi,
+                                            battleResultsA = battleResultsA,
+                                            battleResultsB = battleResultsB,
+                                            viewModel = viewModel,
+                                            onWorkoutFabVisibilityChange = { workoutFabVisible = it }
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Floating Rest Timer Overlay / Scroll-aware FAB
+                            if (snapshot != null) {
+                                if (restTimer.visible) {
+                                    RestTimerOverlay(
+                                        state = restTimer,
+                                        defaultPresetSeconds = snapshot.config.restSeconds,
+                                        onAdjust = viewModel::adjustRestTimer,
+                                        onSelectPreset = viewModel::selectRestPreset,
+                                        onDismiss = viewModel::dismissRestTimer,
+                                        modifier = Modifier.align(Alignment.BottomCenter)
+                                    )
+                                } else {
+                                    androidx.compose.animation.AnimatedVisibility(
+                                        visible = selectedTab == MainTab.WORKOUT && workoutFabVisible,
+                                        enter = scaleIn(
+                                            animationSpec = spring(
+                                                dampingRatio = 0.75f,
+                                                stiffness = Spring.StiffnessMedium
+                                            )
+                                        ) + fadeIn(tween(180)),
+                                        exit = scaleOut(
+                                            animationSpec = spring(
+                                                dampingRatio = 0.85f,
+                                                stiffness = Spring.StiffnessMedium
+                                            )
+                                        ) + fadeOut(tween(150)),
+                                        modifier = Modifier
+                                            .align(Alignment.BottomStart)
+                                            .padding(16.dp)
+                                    ) {
+                                        RestTimerFab(
+                                            onClick = { viewModel.startRestTimer() }
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
-            }
             }
 
             if (showCoachDialog && snapshot != null) {
@@ -561,6 +633,94 @@ private fun MainAppShell(user: FirebaseUser) {
 }
 
 @Composable
+private fun FloatingPillBottomBar(
+    selectedTab: MainTab,
+    onSelectTab: (MainTab) -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+            border = BorderStroke(1.dp, subtleCardBorderColor()),
+            tonalElevation = 6.dp,
+            shadowElevation = 10.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 460.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                NAV_DESTINATIONS.forEach { dest ->
+                    val selected = selectedTab == dest.tab
+                    val pillColor by animateColorAsState(
+                        targetValue = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else Color.Transparent,
+                        animationSpec = tween(220),
+                        label = "nav_pill_color"
+                    )
+                    val contentColor by animateColorAsState(
+                        targetValue = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        animationSpec = tween(220),
+                        label = "nav_content_color"
+                    )
+                    val horizontalPad by animateDpAsState(
+                        targetValue = if (selected) 14.dp else 8.dp,
+                        animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMedium),
+                        label = "nav_pill_pad"
+                    )
+                    val interaction = remember { MutableInteractionSource() }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 52.dp)
+                            .clip(RoundedCornerShape(22.dp))
+                            .background(pillColor)
+                            .clickable(
+                                interactionSource = interaction,
+                                indication = null
+                            ) { onSelectTab(dest.tab) }
+                            .padding(horizontal = horizontalPad, vertical = 6.dp)
+                            .testTag(dest.tag),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Icon(
+                                imageVector = dest.icon,
+                                contentDescription = stringResource(dest.labelRes),
+                                tint = contentColor,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Text(
+                                text = stringResource(dest.labelRes),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium,
+                                color = contentColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ActiveTabContent(
     tab: MainTab,
     snapshot: AppDataSnapshot,
@@ -576,35 +736,45 @@ private fun ActiveTabContent(
     macroTetrisAi: AiMacroTetrisUiState,
     battleResultsA: List<com.mutabei.workout.data.model.FoodItem>,
     battleResultsB: List<com.mutabei.workout.data.model.FoodItem>,
-    viewModel: MainViewModel
+    viewModel: MainViewModel,
+    onWorkoutFabVisibilityChange: (Boolean) -> Unit
 ) {
-    when (tab) {
-        MainTab.WORKOUT -> WorkoutScreen(
-            snapshot = snapshot,
-            selectedDayIndex = selectedDayIndex,
-            drafts = workoutDrafts,
-            workoutTimer = workoutTimer,
-            viewModel = viewModel
-        )
+    AnimatedContent(
+        targetState = tab,
+        transitionSpec = {
+            fadeIn(tween(220)) togetherWith fadeOut(tween(160))
+        },
+        label = "main_tab_crossfade"
+    ) { activeTab ->
+        when (activeTab) {
+            MainTab.WORKOUT -> WorkoutScreen(
+                snapshot = snapshot,
+                selectedDayIndex = selectedDayIndex,
+                drafts = workoutDrafts,
+                workoutTimer = workoutTimer,
+                viewModel = viewModel,
+                onFabVisibilityChange = onWorkoutFabVisibilityChange
+            )
 
-        MainTab.NUTRITION -> NutritionScreen(
-            snapshot = snapshot,
-            selectedDate = selectedNutritionDate,
-            searchResults = searchResults,
-            aiState = foodSheetAi,
-            microSuggestions = microSuggestions,
-            deficiencyAi = deficiencyAi,
-            macroTetrisAi = macroTetrisAi,
-            battleResultsA = battleResultsA,
-            battleResultsB = battleResultsB,
-            viewModel = viewModel
-        )
+            MainTab.NUTRITION -> NutritionScreen(
+                snapshot = snapshot,
+                selectedDate = selectedNutritionDate,
+                searchResults = searchResults,
+                aiState = foodSheetAi,
+                microSuggestions = microSuggestions,
+                deficiencyAi = deficiencyAi,
+                macroTetrisAi = macroTetrisAi,
+                battleResultsA = battleResultsA,
+                battleResultsB = battleResultsB,
+                viewModel = viewModel
+            )
 
-        MainTab.BODY -> BodyScreen(
-            snapshot = snapshot,
-            bodyDraft = bodyDraft,
-            viewModel = viewModel
-        )
+            MainTab.BODY -> BodyScreen(
+                snapshot = snapshot,
+                bodyDraft = bodyDraft,
+                viewModel = viewModel
+            )
+        }
     }
 }
 
@@ -641,6 +811,40 @@ private fun observeNetworkStatus(context: Context): Flow<Boolean> = callbackFlow
         } catch (_: Exception) {
             // ignore
         }
+    }
+}
+
+/**
+ * Gentle double-vibration + subtle short chime fired at 00:05 remaining in Rest Timer.
+ */
+private fun triggerTimerPreAlertFeedback(context: Context) {
+    try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+            vm?.defaultVibrator?.vibrate(
+                VibrationEffect.createWaveform(longArrayOf(0, 80, 90, 80), -1)
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator?.vibrate(
+                    VibrationEffect.createWaveform(longArrayOf(0, 80, 90, 80), -1)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator?.vibrate(140L)
+            }
+        }
+    } catch (_: Exception) {
+        // Vibration not available on this device
+    }
+
+    try {
+        val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 65)
+        tone.startTone(ToneGenerator.TONE_PROP_BEEP, 140)
+    } catch (_: Exception) {
+        // Audio feedback unavailable
     }
 }
 
