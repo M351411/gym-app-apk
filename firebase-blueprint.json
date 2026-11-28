@@ -65,6 +65,7 @@
         "extraCardioKcal": { "type": "integer", "description": "Optional extra cardio/activity active burn in kcal (0..5000)." },
         "stepBufferFactor": { "type": "number", "description": "Optional calorie translation buffer factor (0.0, 0.5 default, or 1.0)." },
         "kcalPerStepOverride": { "type": "number", "description": "Optional manual kcal-per-step rate (0 means weight-aware auto default ~0.04)." },
+        "stepsSource": { "type": "string", "enum": ["auto", "manual"], "description": "Optional source of daily steps ('auto' from Health Connect / device sensor or 'manual' override)." },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp." }
       },

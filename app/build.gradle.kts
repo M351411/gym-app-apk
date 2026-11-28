@@ -95,4 +95,7 @@ dependencies {
     // Networking (Open Food Facts) & Image Loading
     implementation(libs.okhttp)
     implementation(libs.coil.compose)
+
+    // Health Connect (Automatic Steps Tracking)
+    implementation(libs.androidx.health.connect)
 }

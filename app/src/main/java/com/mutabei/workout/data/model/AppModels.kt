@@ -402,9 +402,13 @@ data class NutritionDay(
     val extraCardioKcal: Int = 0,
     val stepBufferFactor: Double = StepsBurnEngine.DEFAULT_BUFFER_FACTOR,
     val kcalPerStepOverride: Double = 0.0,
+    val stepsSource: String = "auto",
     val createdAt: Timestamp? = null,
     val updatedAt: Timestamp? = null
 ) {
+    private fun normalizedStepsSource(): String =
+        if (stepsSource == "manual") "manual" else "auto"
+
     fun toCreateMap(uid: String): Map<String, Any> = mapOf(
         "userId" to uid,
         "date" to date,
@@ -415,6 +419,7 @@ data class NutritionDay(
         "extraCardioKcal" to extraCardioKcal.coerceIn(0, 5000),
         "stepBufferFactor" to stepBufferFactor.coerceIn(0.0, 1.0),
         "kcalPerStepOverride" to kcalPerStepOverride.coerceIn(0.0, 0.2),
+        "stepsSource" to normalizedStepsSource(),
         "createdAt" to FieldValue.serverTimestamp(),
         "updatedAt" to FieldValue.serverTimestamp()
     )
@@ -428,6 +433,7 @@ data class NutritionDay(
         "extraCardioKcal" to extraCardioKcal.coerceIn(0, 5000),
         "stepBufferFactor" to stepBufferFactor.coerceIn(0.0, 1.0),
         "kcalPerStepOverride" to kcalPerStepOverride.coerceIn(0.0, 0.2),
+        "stepsSource" to normalizedStepsSource(),
         "updatedAt" to FieldValue.serverTimestamp()
     )
 
@@ -436,6 +442,8 @@ data class NutritionDay(
             if (!doc.exists()) return null
             val data = doc.data ?: return null
             val rawItems = data["items"] as? List<*> ?: emptyList<Any>()
+            val rawSource = data["stepsSource"] as? String
+            val safeSource = if (rawSource == "manual") "manual" else "auto"
             return NutritionDay(
                 id = doc.id,
                 userId = (data["userId"] as? String).orEmpty(),
@@ -450,6 +458,7 @@ data class NutritionDay(
                     ?: StepsBurnEngine.DEFAULT_BUFFER_FACTOR,
                 kcalPerStepOverride = (data["kcalPerStepOverride"] as? Number)?.toDouble()?.coerceIn(0.0, 0.2)
                     ?: 0.0,
+                stepsSource = safeSource,
                 createdAt = doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE),
                 updatedAt = doc.getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
             )

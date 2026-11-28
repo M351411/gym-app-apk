@@ -1,5 +1,9 @@
 package com.mutabei.workout.ui.screens
 
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -34,6 +38,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -43,11 +48,14 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.material.icons.rounded.Sensors
+import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -57,6 +65,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -82,6 +91,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mutabei.workout.R
 import com.mutabei.workout.data.model.NutritionTargets
@@ -90,6 +100,9 @@ import com.mutabei.workout.data.model.StepsBurnEngine
 import com.mutabei.workout.data.model.StepsBurnSummary
 import com.mutabei.workout.data.model.shiftIsoDate
 import com.mutabei.workout.data.model.todayIso
+import com.mutabei.workout.data.steps.AutoStepsProvider
+import com.mutabei.workout.data.steps.AutoStepsStatus
+import com.mutabei.workout.data.steps.AutoStepsTracker
 import com.mutabei.workout.ui.components.isolateLtr
 import com.mutabei.workout.ui.components.subtleCardBorderColor
 import com.mutabei.workout.ui.components.tactilePressScale
@@ -120,13 +133,32 @@ fun StepsAndBurnScreen(
     val workoutSyncedEnabled by viewModel.workoutSyncedNutritionEnabled.collectAsStateWithLifecycle()
     val defaultStepTarget by viewModel.defaultStepTarget.collectAsStateWithLifecycle()
     val defaultStepBuffer by viewModel.defaultStepBufferFactor.collectAsStateWithLifecycle()
+    val autoStepsStatus by viewModel.autoStepsStatus.collectAsStateWithLifecycle()
+
+    val healthConnectPermissionLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract()
+    ) { granted ->
+        viewModel.onHealthConnectPermissionsResult(granted)
+    }
+
+    val activityRecognitionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        viewModel.onActivityRecognitionPermissionResult(granted)
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.syncAutoSteps(silent = true)
+    }
+
     val dailyContext = remember(
         snapshot,
         selectedDate,
         rollingBudgetEnabled,
         workoutSyncedEnabled,
         defaultStepTarget,
-        defaultStepBuffer
+        defaultStepBuffer,
+        autoStepsStatus.liveTodaySteps
     ) {
         viewModel.computeDailyContext(
             snapshot = snapshot,
@@ -134,7 +166,8 @@ fun StepsAndBurnScreen(
             rollingBudgetEnabled = rollingBudgetEnabled,
             workoutSyncedEnabled = workoutSyncedEnabled,
             defaultStepTarget = defaultStepTarget,
-            defaultBufferFactor = defaultStepBuffer
+            defaultBufferFactor = defaultStepBuffer,
+            liveAutoStepsToday = autoStepsStatus.liveTodaySteps
         )
     }
     val summary = dailyContext.stepsBurn
@@ -254,6 +287,45 @@ fun StepsAndBurnScreen(
                         )
                     }
                 }
+            }
+
+            // 1b. Automatic Step Tracking Status Strip (Health Connect + Device Sensor + Manual Override Fallback)
+            item(key = "auto_steps_status_strip") {
+                AutoStepsStatusStrip(
+                    status = autoStepsStatus,
+                    stepsSource = summary.stepsSource,
+                    onRequestAutoEnable = {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        when {
+                            autoStepsStatus.canRequestHealthConnect ->
+                                healthConnectPermissionLauncher.launch(AutoStepsTracker.HEALTH_CONNECT_PERMISSIONS)
+                            autoStepsStatus.canRequestSensorPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ->
+                                activityRecognitionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+                            else ->
+                                viewModel.syncAutoSteps(silent = false)
+                        }
+                    },
+                    onRequestHealthConnect = {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        healthConnectPermissionLauncher.launch(AutoStepsTracker.HEALTH_CONNECT_PERMISSIONS)
+                    },
+                    onRequestDeviceSensor = {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            activityRecognitionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+                        } else {
+                            viewModel.syncAutoSteps(silent = false)
+                        }
+                    },
+                    onSyncNow = {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        viewModel.syncAutoSteps(silent = false)
+                    },
+                    onResumeAutoMode = {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        viewModel.resumeAutoStepsMode()
+                    }
+                )
             }
 
             // 2. Hero Steps Tracker Card
@@ -434,8 +506,226 @@ fun StepsAndBurnScreen(
                 SevenDayStepsCard(
                     snapshot = snapshot,
                     endDate = selectedDate,
-                    stepTarget = summary.stepTarget
+                    stepTarget = summary.stepTarget,
+                    liveAutoStepsToday = autoStepsStatus.liveTodaySteps
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AutoStepsStatusStrip(
+    status: AutoStepsStatus,
+    stepsSource: String,
+    onRequestAutoEnable: () -> Unit,
+    onRequestHealthConnect: () -> Unit,
+    onRequestDeviceSensor: () -> Unit,
+    onSyncNow: () -> Unit,
+    onResumeAutoMode: () -> Unit
+) {
+    val semantic = LocalSemanticColors.current
+    val isManual = stepsSource == "manual"
+    val isAutoActive = status.isAutoTrackingReady && !isManual
+
+    val dotColor = when {
+        isManual -> semantic.warn
+        isAutoActive -> semantic.ok
+        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+    }
+
+    val headline = when {
+        isManual -> "تعديل يدوي (${isolateLtr("Manual")})"
+        status.activeProvider == AutoStepsProvider.HEALTH_CONNECT ->
+            "تتبع تلقائي · ${isolateLtr("Health Connect")}"
+        status.activeProvider == AutoStepsProvider.DEVICE_SENSOR ->
+            "تتبع تلقائي · حساس الموبايل"
+        else -> "تفعيل العدّ التلقائي للخطوات"
+    }
+
+    val subline = when {
+        isManual -> "الرقم معدّل يدوياً — يمكنك الرجوع للعدّ التلقائي في أي وقت."
+        status.isSyncing -> "جاري مزامنة الخطوات..."
+        isAutoActive && !status.lastSyncedLabel.isNullOrBlank() ->
+            "متصل ويحسب خطواتك تلقائياً · آخر تحديث ${isolateLtr(status.lastSyncedLabel)}"
+        isAutoActive -> "متصل ويحسب خطواتك تلقائياً لكل يوم"
+        status.canRequestHealthConnect || status.canRequestSensorPermission ->
+            "اقرأ خطواتك تلقائياً من الموبايل أو ${isolateLtr("Health Connect")} بدون إدخال يدوي."
+        else -> "استخدم الأزرار السريعة بالأسفل أو اضغط على الحلقة لإدخال الخطوات."
+    }
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            1.dp,
+            if (isAutoActive) semantic.ok.copy(alpha = 0.28f) else subtleCardBorderColor()
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("auto_steps_status_strip")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(dotColor)
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = headline,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = subline,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                when {
+                    isManual -> {
+                        Surface(
+                            shape = RoundedCornerShape(99.dp),
+                            color = StepsAccent.copy(alpha = 0.14f),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(99.dp))
+                                .clickable(onClick = onResumeAutoMode)
+                                .testTag("resume_auto_steps_button")
+                        ) {
+                            Text(
+                                text = "العودة للتلقائي",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = StepsAccent,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
+                    status.isAutoTrackingReady -> {
+                        IconButton(
+                            onClick = onSyncNow,
+                            enabled = !status.isSyncing,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .testTag("sync_steps_now_button")
+                        ) {
+                            if (status.isSyncing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = StepsAccent
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Rounded.Sync,
+                                    contentDescription = "مزامنة الخطوات الآن",
+                                    tint = StepsAccent,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    status.canRequestHealthConnect || status.canRequestSensorPermission -> {
+                        Surface(
+                            shape = RoundedCornerShape(99.dp),
+                            color = StepsAccent,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(99.dp))
+                                .clickable(onClick = onRequestAutoEnable)
+                                .testTag("enable_auto_steps_button")
+                        ) {
+                            Text(
+                                text = "تفعيل التلقائي",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Secondary quick connect chips when an alternate auto source is available
+            if (!isManual && status.activeProvider == AutoStepsProvider.DEVICE_SENSOR && status.canRequestHealthConnect) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(99.dp),
+                        color = StepsAccent.copy(alpha = 0.10f),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(99.dp))
+                            .clickable(onClick = onRequestHealthConnect)
+                            .testTag("connect_health_connect_chip")
+                    ) {
+                        Text(
+                            text = "+ ربط ${isolateLtr("Health Connect")} لمزامنة الساعة و 7 أيام",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = StepsAccent,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+            } else if (!status.isAutoTrackingReady && status.canRequestHealthConnect && status.canRequestSensorPermission) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(99.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(99.dp))
+                            .clickable(onClick = onRequestDeviceSensor)
+                            .testTag("enable_device_sensor_chip")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Sensors,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = "أو استخدم حساس الموبايل مباشرة",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -1014,13 +1304,20 @@ private fun TranslationRow(
 private fun SevenDayStepsCard(
     snapshot: AppDataSnapshot,
     endDate: String,
-    stepTarget: Int
+    stepTarget: Int,
+    liveAutoStepsToday: Int?
 ) {
     val semantic = LocalSemanticColors.current
-    val days = remember(snapshot.nutritionDays, endDate) {
+    val today = todayIso()
+    val days = remember(snapshot.nutritionDays, endDate, liveAutoStepsToday) {
         (-6..0).map { offset ->
             val iso = shiftIsoDate(endDate, offset.toLong())
-            val st = snapshot.nutritionDays[iso]?.steps ?: 0
+            val day = snapshot.nutritionDays[iso]
+            val st = if (iso == today && day?.stepsSource != "manual" && liveAutoStepsToday != null) {
+                maxOf(day?.steps ?: 0, liveAutoStepsToday)
+            } else {
+                day?.steps ?: 0
+            }
             iso.takeLast(2) to st
         }
     }

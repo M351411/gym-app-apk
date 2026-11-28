@@ -278,6 +278,22 @@ private fun MainAppShell(user: FirebaseUser) {
     // Default to dark during initial hydration so no white frame ever flashes after the dark splash screen
     val themeMode = snapshot?.config?.themeMode ?: "dark"
 
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> viewModel.onAppResumedForSteps()
+                Lifecycle.Event.ON_STOP -> viewModel.onAppStoppedForSteps()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            viewModel.onAppStoppedForSteps()
+        }
+    }
+
     LaunchedEffect(selectedTab) {
         workoutFabVisible = true
     }

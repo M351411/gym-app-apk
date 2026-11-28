@@ -53,6 +53,8 @@ import com.mutabei.workout.data.repository.GeminiAiRepository
 import com.mutabei.workout.data.repository.NutrientFoodSuggestion
 import com.mutabei.workout.data.repository.OfflineFoodRepository
 import com.mutabei.workout.data.repository.OpenFoodFactsRepository
+import com.mutabei.workout.data.steps.AutoStepsStatus
+import com.mutabei.workout.data.steps.AutoStepsTracker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -269,6 +271,12 @@ class MainViewModel(
     private val _defaultStepBufferFactor = MutableStateFlow(StepsBurnEngine.DEFAULT_BUFFER_FACTOR)
     val defaultStepBufferFactor: StateFlow<Double> = _defaultStepBufferFactor.asStateFlow()
 
+    private val autoStepsTracker = AutoStepsTracker(appContext)
+    val autoStepsStatus: StateFlow<AutoStepsStatus> = autoStepsTracker.status
+    private var lastAutoPersistedDate: String? = null
+    private var lastAutoPersistedSteps: Int = -1
+    private var lastAutoPersistedEpochMs: Long = 0L
+
     fun setRollingCalorieBudgetEnabled(enabled: Boolean) {
         _rollingCalorieBudgetEnabled.value = enabled
         nutritionV2Prefs.edit().putBoolean("rolling_calorie_budget", enabled).apply()
@@ -351,6 +359,9 @@ class MainViewModel(
     val enrichMicrosBusy: StateFlow<String?> = _enrichMicrosBusy.asStateFlow()
 
     init {
+        autoStepsTracker.setOnLiveTodayStepsListener { dateIso, measuredSteps ->
+            handleLiveSensorSteps(dateIso, measuredSteps)
+        }
         viewModelScope.launch(Dispatchers.IO) {
             _rollingCalorieBudgetEnabled.value = nutritionV2Prefs.getBoolean("rolling_calorie_budget", true)
             _workoutSyncedNutritionEnabled.value = nutritionV2Prefs.getBoolean("workout_synced_nutrition", true)
@@ -859,14 +870,163 @@ class MainViewModel(
     }
 
     fun adjustSteps(deltaSteps: Int) {
+        val selectedDate = _selectedNutritionDate.value
+        val liveToday = if (selectedDate == todayIso()) autoStepsStatus.value.liveTodaySteps else null
         updateSelectedDaySteps { day ->
-            day.copy(steps = (day.steps + deltaSteps).coerceIn(0, 150000))
+            val currentEffective = if (day.stepsSource != "manual" && liveToday != null) {
+                maxOf(day.steps, liveToday)
+            } else {
+                day.steps
+            }
+            day.copy(
+                steps = (currentEffective + deltaSteps).coerceIn(0, 150000),
+                stepsSource = "manual"
+            )
         }
     }
 
     fun setSteps(steps: Int) {
         updateSelectedDaySteps { day ->
-            day.copy(steps = steps.coerceIn(0, 150000))
+            day.copy(
+                steps = steps.coerceIn(0, 150000),
+                stepsSource = "manual"
+            )
+        }
+    }
+
+    fun resumeAutoStepsMode() {
+        val date = _selectedNutritionDate.value
+        updateSelectedDaySteps { day ->
+            day.copy(stepsSource = "auto")
+        }
+        syncAutoSteps(silent = false, forceAutoDate = date)
+    }
+
+    fun onAppResumedForSteps() {
+        syncAutoSteps(silent = true)
+    }
+
+    fun onAppStoppedForSteps() {
+        autoStepsTracker.stopLiveSensor()
+    }
+
+    fun onHealthConnectPermissionsResult(granted: Set<String>) {
+        if (granted.containsAll(AutoStepsTracker.HEALTH_CONNECT_PERMISSIONS)) {
+            showToast("تم تفعيل قراءة الخطوات تلقائياً من Health Connect ✅")
+            syncAutoSteps(silent = true, forceAutoDate = todayIso())
+        } else {
+            autoStepsTracker.startLiveSensorIfPermitted()
+            syncAutoSteps(silent = true)
+            showToast("محتاج إذن Health Connect للقراءة التلقائية، أو تقدر تستخدم الحساس أو التعديل اليدوي.")
+        }
+    }
+
+    fun onActivityRecognitionPermissionResult(granted: Boolean) {
+        if (granted) {
+            autoStepsTracker.startLiveSensorIfPermitted()
+            showToast("تم تفعيل حساس الخطوات التلقائي في الموبايل ✅")
+            syncAutoSteps(silent = true, forceAutoDate = todayIso())
+        } else {
+            showToast("محتاج إذن النشاط البدني لعدّ الخطوات تلقائياً، وتقدر تسجّل يدوياً في أي وقت.")
+        }
+    }
+
+    fun syncAutoSteps(silent: Boolean = false, forceAutoDate: String? = null) {
+        viewModelScope.launch {
+            val syncedMap = autoStepsTracker.refreshAndSync(daysBack = 7)
+            val snap = currentSnapshot()
+            val today = todayIso()
+            var updatedAny = false
+
+            syncedMap.forEach { (dateIso, measuredSteps) ->
+                val existing = snap.nutritionDays[dateIso]
+                val isManualLocked = existing?.stepsSource == "manual" && dateIso != forceAutoDate
+                if (isManualLocked) return@forEach
+
+                val targetSteps = if (dateIso == forceAutoDate) {
+                    measuredSteps
+                } else {
+                    maxOf(existing?.steps ?: 0, measuredSteps)
+                }
+
+                // Skip writing empty 0-step past documents unless doc already exists
+                if (existing == null && targetSteps <= 0) return@forEach
+                if (existing != null && existing.steps == targetSteps && existing.stepsSource == "auto") {
+                    return@forEach
+                }
+
+                val dayToSave = (existing ?: NutritionDay(
+                    id = dateIso,
+                    userId = currentUserId,
+                    date = dateIso,
+                    stepTarget = _defaultStepTarget.value,
+                    stepBufferFactor = _defaultStepBufferFactor.value
+                )).copy(
+                    steps = targetSteps.coerceIn(0, 150000),
+                    stepsSource = "auto"
+                )
+
+                val res = firestoreRepo.saveNutritionDay(currentUserId, dayToSave)
+                if (res.isSuccess) {
+                    updatedAny = true
+                    if (dateIso == today) {
+                        lastAutoPersistedDate = today
+                        lastAutoPersistedSteps = dayToSave.steps
+                        lastAutoPersistedEpochMs = System.currentTimeMillis()
+                    }
+                }
+            }
+
+            if (!silent) {
+                val statusNow = autoStepsStatus.value
+                when {
+                    statusNow.activeProvider == com.mutabei.workout.data.steps.AutoStepsProvider.HEALTH_CONNECT ->
+                        showToast("تمت مزامنة الخطوات من Health Connect ✅")
+                    statusNow.activeProvider == com.mutabei.workout.data.steps.AutoStepsProvider.DEVICE_SENSOR ->
+                        showToast("حساس الخطوات شغّال ويعد تلقائياً ✅")
+                    updatedAny ->
+                        showToast("تم تحديث الخطوات ✅")
+                    else ->
+                        showToast("فعّل إذن Health Connect أو حساس الموبايل للعدّ التلقائي.")
+                }
+            }
+        }
+    }
+
+    private fun handleLiveSensorSteps(dateIso: String, measuredSteps: Int) {
+        if (measuredSteps <= 0) return
+        val snap = currentSnapshot()
+        val existing = snap.nutritionDays[dateIso]
+        if (existing?.stepsSource == "manual") return
+
+        val effectiveSteps = maxOf(existing?.steps ?: 0, measuredSteps).coerceIn(0, 150000)
+        val nowMs = System.currentTimeMillis()
+        val stepsDelta = kotlin.math.abs(effectiveSteps - lastAutoPersistedSteps)
+        val elapsedMs = nowMs - lastAutoPersistedEpochMs
+
+        // Throttle cloud writes cleanly: save immediately on first reading, >=25 steps delta, or >=30s elapsed
+        val shouldPersist = lastAutoPersistedDate != dateIso ||
+            stepsDelta >= 25 ||
+            (stepsDelta > 0 && elapsedMs >= 30_000L)
+
+        if (!shouldPersist) return
+
+        lastAutoPersistedDate = dateIso
+        lastAutoPersistedSteps = effectiveSteps
+        lastAutoPersistedEpochMs = nowMs
+
+        val dayToSave = (existing ?: NutritionDay(
+            id = dateIso,
+            userId = currentUserId,
+            date = dateIso,
+            stepTarget = _defaultStepTarget.value,
+            stepBufferFactor = _defaultStepBufferFactor.value
+        )).copy(
+            steps = effectiveSteps,
+            stepsSource = "auto"
+        )
+        viewModelScope.launch {
+            firestoreRepo.saveNutritionDay(currentUserId, dayToSave)
         }
     }
 
@@ -902,8 +1062,8 @@ class MainViewModel(
 
     /**
      * Unified cross-section calculation hub connecting Body (`BMR = 1,600 kcal` reference + weight),
-     * Steps & Burn (`0% / 50% / 100%` buffer), Nutrition calorie/macro targets (protein-protected),
-     * and live Workout progress for any ISO date.
+     * Steps & Burn (`0% / 50% / 100%` buffer + automatic device/Health Connect steps), Nutrition
+     * calorie/macro targets (protein-protected), and live Workout progress for any ISO date.
      */
     fun computeDailyContext(
         snapshot: AppDataSnapshot,
@@ -914,7 +1074,8 @@ class MainViewModel(
         workoutDrafts: Map<String, List<SetEntry>> = _workoutDrafts.value,
         workoutTimer: WorkoutSessionTimerState = _workoutSessionTimer.value,
         defaultStepTarget: Int = _defaultStepTarget.value,
-        defaultBufferFactor: Double = _defaultStepBufferFactor.value
+        defaultBufferFactor: Double = _defaultStepBufferFactor.value,
+        liveAutoStepsToday: Int? = autoStepsStatus.value.liveTodaySteps
     ): UnifiedDailyContext {
         val baseTargets = computeTargets(snapshot.config, snapshot.bodyRecords)
         return ConnectedAppEngine.buildDailyContext(
@@ -931,7 +1092,8 @@ class MainViewModel(
             selectedDayIndex = selectedDayIndex,
             workoutDrafts = workoutDrafts,
             isTimerRunning = workoutTimer.isRunning,
-            elapsedSeconds = workoutTimer.elapsedSeconds
+            elapsedSeconds = workoutTimer.elapsedSeconds,
+            liveAutoStepsToday = liveAutoStepsToday
         )
     }
 
@@ -3005,4 +3167,9 @@ class MainViewModel(
 
     fun computeWeekNumber(startDate: String): Int =
         ((daysBetweenIso(startDate, todayIso()) / 7L).toInt() + 1).coerceAtLeast(1)
+
+    override fun onCleared() {
+        autoStepsTracker.stopLiveSensor()
+        super.onCleared()
+    }
 }

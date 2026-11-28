@@ -91,6 +91,7 @@ fun SectionHubScreen(
     val workoutSyncedEnabled by viewModel.workoutSyncedNutritionEnabled.collectAsStateWithLifecycle()
     val defaultStepTarget by viewModel.defaultStepTarget.collectAsStateWithLifecycle()
     val defaultStepBuffer by viewModel.defaultStepBufferFactor.collectAsStateWithLifecycle()
+    val autoStepsStatus by viewModel.autoStepsStatus.collectAsStateWithLifecycle()
 
     // Single unified live daily context shared across Hub, Workout, Nutrition, Steps & Burn, and Body
     val dailyContext = remember(
@@ -102,7 +103,8 @@ fun SectionHubScreen(
         rollingBudgetEnabled,
         workoutSyncedEnabled,
         defaultStepTarget,
-        defaultStepBuffer
+        defaultStepBuffer,
+        autoStepsStatus.liveTodaySteps
     ) {
         viewModel.computeDailyContext(
             snapshot = snapshot,
@@ -113,7 +115,8 @@ fun SectionHubScreen(
             workoutDrafts = workoutDrafts,
             workoutTimer = workoutTimer,
             defaultStepTarget = defaultStepTarget,
-            defaultBufferFactor = defaultStepBuffer
+            defaultBufferFactor = defaultStepBuffer,
+            liveAutoStepsToday = autoStepsStatus.liveTodaySteps
         )
     }
     val nf = remember { NumberFormat.getIntegerInstance(Locale.US) }

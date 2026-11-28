@@ -166,12 +166,14 @@ fun BodyScreen(
     val tapeRecords by viewModel.bodyTapeRecords.collectAsStateWithLifecycle()
     val defaultStepTarget by viewModel.defaultStepTarget.collectAsStateWithLifecycle()
     val defaultStepBuffer by viewModel.defaultStepBufferFactor.collectAsStateWithLifecycle()
-    val dailyContext = remember(snapshot, defaultStepTarget, defaultStepBuffer) {
+    val autoStepsStatus by viewModel.autoStepsStatus.collectAsStateWithLifecycle()
+    val dailyContext = remember(snapshot, defaultStepTarget, defaultStepBuffer, autoStepsStatus.liveTodaySteps) {
         viewModel.computeDailyContext(
             snapshot = snapshot,
             date = todayIso(),
             defaultStepTarget = defaultStepTarget,
-            defaultBufferFactor = defaultStepBuffer
+            defaultBufferFactor = defaultStepBuffer,
+            liveAutoStepsToday = autoStepsStatus.liveTodaySteps
         )
     }
     val currentTargets = dailyContext.baseTargets

@@ -161,6 +161,7 @@ fun NutritionScreen(
     val workoutSyncedEnabled by viewModel.workoutSyncedNutritionEnabled.collectAsStateWithLifecycle()
     val defaultStepTarget by viewModel.defaultStepTarget.collectAsStateWithLifecycle()
     val defaultStepBuffer by viewModel.defaultStepBufferFactor.collectAsStateWithLifecycle()
+    val autoStepsStatus by viewModel.autoStepsStatus.collectAsStateWithLifecycle()
 
     val dailyContext = remember(
         selectedDate,
@@ -168,7 +169,8 @@ fun NutritionScreen(
         rollingBudgetEnabled,
         workoutSyncedEnabled,
         defaultStepTarget,
-        defaultStepBuffer
+        defaultStepBuffer,
+        autoStepsStatus.liveTodaySteps
     ) {
         viewModel.computeDailyContext(
             snapshot = snapshot,
@@ -176,7 +178,8 @@ fun NutritionScreen(
             rollingBudgetEnabled = rollingBudgetEnabled,
             workoutSyncedEnabled = workoutSyncedEnabled,
             defaultStepTarget = defaultStepTarget,
-            defaultBufferFactor = defaultStepBuffer
+            defaultBufferFactor = defaultStepBuffer,
+            liveAutoStepsToday = autoStepsStatus.liveTodaySteps
         )
     }
     val targets = dailyContext.baseTargets

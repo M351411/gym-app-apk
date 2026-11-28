@@ -226,6 +226,15 @@ test("NutritionDays: owner CRUD, list, and validation bounds", async () => {
       extraCardioKcal: 120,
       stepBufferFactor: 0.5,
       kcalPerStepOverride: 0.04,
+      stepsSource: "auto",
+      updatedAt: new Date(Date.now() - 1000),
+    })
+  );
+
+  // Invalid stepsSource rejected
+  await assertFails(
+    dayRef.update({
+      stepsSource: "hacked",
       updatedAt: new Date(Date.now() - 1000),
     })
   );

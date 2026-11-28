@@ -58,7 +58,8 @@ data class StepsBurnSummary(
     val addedCaloriesFromSteps: Int,
     val addedCaloriesTotal: Int,
     val adjustedCalorieTarget: Int,
-    val protectedDeficitBufferKcal: Int
+    val protectedDeficitBufferKcal: Int,
+    val stepsSource: String = "auto"
 )
 
 object StepsBurnEngine {
@@ -89,9 +90,16 @@ object StepsBurnEngine {
         weightKg: Double?,
         bmrKcal: Int? = null,
         defaultBufferFactor: Double = DEFAULT_BUFFER_FACTOR,
-        defaultStepTarget: Int = DEFAULT_STEP_TARGET
+        defaultStepTarget: Int = DEFAULT_STEP_TARGET,
+        liveAutoStepsOverride: Int? = null
     ): StepsBurnSummary {
-        val steps = (day?.steps ?: 0).coerceIn(0, 150_000)
+        val source = if (day?.stepsSource == "manual") "manual" else "auto"
+        val rawSteps = if (source == "auto" && liveAutoStepsOverride != null) {
+            maxOf(day?.steps ?: 0, liveAutoStepsOverride)
+        } else {
+            day?.steps ?: 0
+        }
+        val steps = rawSteps.coerceIn(0, 150_000)
         val target = (day?.stepTarget ?: defaultStepTarget).coerceIn(1_000, 50_000)
         val extraCardio = (day?.extraCardioKcal ?: 0).coerceIn(0, 5_000)
         val buffer = (day?.stepBufferFactor ?: defaultBufferFactor).coerceIn(0.0, 1.0)
@@ -133,7 +141,8 @@ object StepsBurnEngine {
             addedCaloriesFromSteps = addedFromSteps,
             addedCaloriesTotal = addedTotal,
             adjustedCalorieTarget = adjustedTarget,
-            protectedDeficitBufferKcal = protectedBuffer
+            protectedDeficitBufferKcal = protectedBuffer,
+            stepsSource = source
         )
     }
 }
@@ -295,7 +304,8 @@ object ConnectedAppEngine {
         selectedDayIndex: Int,
         workoutDrafts: Map<String, List<SetEntry>>,
         isTimerRunning: Boolean,
-        elapsedSeconds: Long
+        elapsedSeconds: Long,
+        liveAutoStepsToday: Int? = null
     ): UnifiedDailyContext {
         val latestBody = bodyRecords.maxByOrNull { it.date }
         val effectiveWeight = resolveEffectiveWeight(config, bodyRecords)
@@ -307,6 +317,7 @@ object ConnectedAppEngine {
         } else null
 
         val preStepKcal = rollingBudget?.adjustedTodayTarget ?: baseTargets?.kcal ?: StepsBurnEngine.DEFAULT_BASE_CUTTING_KCAL
+        val liveAutoOverride = if (date == todayIso()) liveAutoStepsToday else null
 
         val stepsBurn = StepsBurnEngine.evaluate(
             day = day,
@@ -314,7 +325,8 @@ object ConnectedAppEngine {
             weightKg = effectiveWeight,
             bmrKcal = bmrRef,
             defaultBufferFactor = defaultBufferFactor,
-            defaultStepTarget = defaultStepTarget
+            defaultStepTarget = defaultStepTarget,
+            liveAutoStepsOverride = liveAutoOverride
         )
 
         val workoutSync = if (baseTargets != null && workoutSyncedEnabled) {

@@ -110,6 +110,7 @@ service cloud.firestore {
              isOptNum(data, 'extraCardioKcal', 0, 5000) &&
              isOptNum(data, 'stepBufferFactor', 0, 1) &&
              isOptNum(data, 'kcalPerStepOverride', 0, 0.2) &&
+             (!('stepsSource' in data) || (data.stepsSource is string && data.stepsSource in ['auto', 'manual'])) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
@@ -227,7 +228,7 @@ service cloud.firestore {
                          incoming().keys().hasAll(['userId', 'date', 'waterMl', 'items', 'createdAt', 'updatedAt']) &&
                          incoming().keys().hasOnly([
                            'userId', 'date', 'waterMl', 'items',
-                           'steps', 'stepTarget', 'extraCardioKcal', 'stepBufferFactor', 'kcalPerStepOverride',
+                           'steps', 'stepTarget', 'extraCardioKcal', 'stepBufferFactor', 'kcalPerStepOverride', 'stepsSource',
                            'createdAt', 'updatedAt'
                          ]) &&
                          isValidNutritionDay(incoming(), userId);
@@ -239,7 +240,7 @@ service cloud.firestore {
                          incoming().createdAt == existing().createdAt &&
                          incoming().diff(existing()).affectedKeys().hasOnly([
                            'date', 'waterMl', 'items',
-                           'steps', 'stepTarget', 'extraCardioKcal', 'stepBufferFactor', 'kcalPerStepOverride',
+                           'steps', 'stepTarget', 'extraCardioKcal', 'stepBufferFactor', 'kcalPerStepOverride', 'stepsSource',
                            'updatedAt'
                          ]);
 
