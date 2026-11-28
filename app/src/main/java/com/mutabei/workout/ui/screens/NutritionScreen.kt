@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AddCircleOutline
 import androidx.compose.material.icons.rounded.CameraAlt
@@ -97,6 +98,7 @@ import com.mutabei.workout.data.model.NutritionDay
 import com.mutabei.workout.data.model.NutritionTargets
 import com.mutabei.workout.data.model.ReverseMealBuilderEngine
 import com.mutabei.workout.data.model.RollingCalorieBudgetEngine
+import com.mutabei.workout.data.model.StepBufferPreset
 import com.mutabei.workout.data.model.SupplementCatalog
 import com.mutabei.workout.data.model.WeeklyGroceryListEngine
 import com.mutabei.workout.data.model.WorkoutSyncedNutritionEngine
@@ -131,8 +133,11 @@ import com.mutabei.workout.ui.viewmodel.AiDeficiencyUiState
 import com.mutabei.workout.ui.viewmodel.AiMacroTetrisUiState
 import com.mutabei.workout.ui.viewmodel.AppDataSnapshot
 import com.mutabei.workout.ui.viewmodel.FoodSheetAiState
+import com.mutabei.workout.ui.viewmodel.MainTab
 import com.mutabei.workout.ui.viewmodel.MainViewModel
+import java.text.NumberFormat
 import java.util.Calendar
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -152,36 +157,33 @@ fun NutritionScreen(
     val semantic = LocalSemanticColors.current
     val today = todayIso()
     val day = snapshot.nutritionDays[selectedDate] ?: NutritionDay(date = selectedDate)
-    val targets = remember(snapshot.config, snapshot.bodyRecords) {
-        viewModel.computeTargets(snapshot.config, snapshot.bodyRecords)
-    }
     val rollingBudgetEnabled by viewModel.rollingCalorieBudgetEnabled.collectAsStateWithLifecycle()
     val workoutSyncedEnabled by viewModel.workoutSyncedNutritionEnabled.collectAsStateWithLifecycle()
+    val defaultStepTarget by viewModel.defaultStepTarget.collectAsStateWithLifecycle()
+    val defaultStepBuffer by viewModel.defaultStepBufferFactor.collectAsStateWithLifecycle()
 
-    val rollingBudget = remember(selectedDate, targets, snapshot.nutritionDays, rollingBudgetEnabled) {
-        if (targets != null && rollingBudgetEnabled) {
-            RollingCalorieBudgetEngine.evaluate(selectedDate, targets.kcal, snapshot.nutritionDays)
-        } else null
-    }
-    val effectiveKcalTarget = rollingBudget?.adjustedTodayTarget ?: targets?.kcal ?: 0
-    val workoutSync = remember(selectedDate, targets, effectiveKcalTarget, snapshot.config, snapshot.sessions, workoutSyncedEnabled) {
-        if (targets != null && workoutSyncedEnabled) {
-            WorkoutSyncedNutritionEngine.evaluate(
-                referenceDate = selectedDate,
-                baseTargets = targets,
-                effectiveKcal = effectiveKcalTarget,
-                config = snapshot.config,
-                sessions = snapshot.sessions.values.toList()
-            )
-        } else null
-    }
-    val effectiveTargets = remember(targets, effectiveKcalTarget, workoutSync) {
-        targets?.copy(
-            kcal = effectiveKcalTarget,
-            carbsG = workoutSync?.carbsG ?: targets.carbsG,
-            fatG = workoutSync?.fatG ?: targets.fatG
+    val dailyContext = remember(
+        selectedDate,
+        snapshot,
+        rollingBudgetEnabled,
+        workoutSyncedEnabled,
+        defaultStepTarget,
+        defaultStepBuffer
+    ) {
+        viewModel.computeDailyContext(
+            snapshot = snapshot,
+            date = selectedDate,
+            rollingBudgetEnabled = rollingBudgetEnabled,
+            workoutSyncedEnabled = workoutSyncedEnabled,
+            defaultStepTarget = defaultStepTarget,
+            defaultBufferFactor = defaultStepBuffer
         )
     }
+    val targets = dailyContext.baseTargets
+    val rollingBudget = dailyContext.rollingBudget
+    val workoutSync = dailyContext.workoutSync
+    val stepsBurn = dailyContext.stepsBurn
+    val effectiveTargets = dailyContext.adjustedTargets
 
     val vitDBreakdown = remember(selectedDate, snapshot.nutritionDays) {
         NutritionConstants.computeVitaminDBreakdown(selectedDate, snapshot.nutritionDays)
@@ -424,6 +426,113 @@ fun NutritionScreen(
                                             rollingBudget = rollingBudget
                                         )
                                     }
+
+                                    // Connected Steps & Burn -> Calorie Budget Strip (protects protein target)
+                                    Spacer(Modifier.height(10.dp))
+                                    val nf = remember { NumberFormat.getIntegerInstance(Locale.US) }
+                                    val stepsAccent = Color(0xFF14B8A6)
+                                    Surface(
+                                        shape = RoundedCornerShape(14.dp),
+                                        color = stepsAccent.copy(alpha = 0.08f),
+                                        border = BorderStroke(1.dp, stepsAccent.copy(alpha = 0.24f)),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .clickable {
+                                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                viewModel.selectTab(MainTab.STEPS)
+                                            }
+                                            .testTag("nutrition_steps_burn_link")
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                    modifier = Modifier.weight(1f)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.AutoMirrored.Rounded.DirectionsWalk,
+                                                        contentDescription = null,
+                                                        tint = stepsAccent,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                    val stepsHeadline = if (stepsBurn.steps > 0 || stepsBurn.extraCardioKcal > 0) {
+                                                        "${isolateLtr(nf.format(stepsBurn.steps))} خطوة · ${isolateLtr("+${stepsBurn.addedCaloriesTotal}")} سعر (${isolateLtr(stepsBurn.activePreset.percentLabel)})"
+                                                    } else {
+                                                        "${isolateLtr("BMR ${nf.format(stepsBurn.bmrReferenceKcal)}")} · سجّل خطواتك لتحديث السعرات"
+                                                    }
+                                                    Text(
+                                                        text = stepsHeadline,
+                                                        style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.onSurface,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                                Text(
+                                                    text = "الخطوات والحرق",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = stepsAccent
+                                                )
+                                            }
+                                            if (stepsBurn.totalActiveBurnKcal > 0) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Text(
+                                                        text = "حماية البروتين (${isolateLtr("${effectiveTargets.proteinG}g")}) · حرق نشط ${isolateLtr("${stepsBurn.totalActiveBurnKcal}")} سعر",
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                        StepBufferPreset.entries.forEach { preset ->
+                                                            val selected = stepsBurn.activePreset == preset
+                                                            Surface(
+                                                                shape = RoundedCornerShape(99.dp),
+                                                                color = if (selected) stepsAccent else MaterialTheme.colorScheme.surface,
+                                                                border = BorderStroke(
+                                                                    1.dp,
+                                                                    if (selected) stepsAccent else subtleCardBorderColor()
+                                                                ),
+                                                                modifier = Modifier
+                                                                    .clip(RoundedCornerShape(99.dp))
+                                                                    .clickable {
+                                                                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                                        viewModel.setStepBufferFactor(preset.factor)
+                                                                    }
+                                                                    .testTag("nutrition_buffer_${preset.name.lowercase()}")
+                                                            ) {
+                                                                Text(
+                                                                    text = isolateLtr(preset.percentLabel),
+                                                                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 } else {
                                     Text(
                                         text = "${isolateLtr("${kcal.roundToInt()}")} سعر",
@@ -603,13 +712,17 @@ fun NutritionScreen(
                                     )
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            text = "فيتامين D مُغطى النهارده تلقائياً (+${vitDBreakdown.carryInIu} IU)",
-                                            style = MaterialTheme.typography.labelMedium,
+                                            text = "فيتامين D مُغطى النهارده تلقائياً · ${isolateLtr("+${vitDBreakdown.carryInIu} IU")}",
+                                            style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
                                             fontWeight = FontWeight.Bold,
                                             color = semantic.ok
                                         )
+                                        val sourceLabel = (vitDBreakdown.yesterdaySourceName ?: "دافاليندي")
+                                            .substringBefore("(")
+                                            .trim()
+                                            .ifBlank { "دافاليندي" }
                                         Text(
-                                            text = "مُرحّل من جرعة أمس (${vitDBreakdown.yesterdaySourceName ?: "دافاليندي"}) — نظام يوم أه ويوم لا",
+                                            text = "مُرحّل من جرعة أمس · $sourceLabel — نظام يوم أه ويوم لا",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -655,8 +768,8 @@ fun NutritionScreen(
                                     )
                                     if (triggersVdCarryover) {
                                         Text(
-                                            text = "استثناء فيتامين D: 5000 IU اليوم + ${vitDBreakdown.carryOutIu} IU مُرحّلة لغداً تلقائياً",
-                                            style = MaterialTheme.typography.labelSmall,
+                                            text = "فيتامين D: ${isolateLtr("5000 IU")} اليوم + ${isolateLtr("${vitDBreakdown.carryOutIu} IU")} مُرحّل لغداً تلقائياً",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                                             fontWeight = FontWeight.SemiBold,
                                             color = semantic.ok
                                         )

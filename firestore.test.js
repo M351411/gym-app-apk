@@ -221,6 +221,11 @@ test("NutritionDays: owner CRUD, list, and validation bounds", async () => {
   await assertSucceeds(
     dayRef.update({
       waterMl: 750,
+      steps: 8500,
+      stepTarget: 10000,
+      extraCardioKcal: 120,
+      stepBufferFactor: 0.5,
+      kcalPerStepOverride: 0.04,
       updatedAt: new Date(Date.now() - 1000),
     })
   );
@@ -229,6 +234,22 @@ test("NutritionDays: owner CRUD, list, and validation bounds", async () => {
   await assertFails(
     dayRef.update({
       waterMl: 99999,
+      updatedAt: new Date(Date.now() - 1000),
+    })
+  );
+
+  // Out-of-bounds stepBufferFactor (> 1.0) rejected
+  await assertFails(
+    dayRef.update({
+      stepBufferFactor: 1.5,
+      updatedAt: new Date(Date.now() - 1000),
+    })
+  );
+
+  // Out-of-bounds negative steps rejected
+  await assertFails(
+    dayRef.update({
+      steps: -100,
       updatedAt: new Date(Date.now() - 1000),
     })
   );

@@ -35,10 +35,13 @@ import com.mutabei.workout.data.model.NutritionTargets
 import com.mutabei.workout.data.model.PortionOption
 import com.mutabei.workout.data.model.PreWorkoutGamePlan
 import com.mutabei.workout.data.model.RecipeIngredient
+import com.mutabei.workout.data.model.ConnectedAppEngine
 import com.mutabei.workout.data.model.SetEntry
 import com.mutabei.workout.data.model.SplitDay
+import com.mutabei.workout.data.model.StepsBurnEngine
 import com.mutabei.workout.data.model.SupplementCatalog
 import com.mutabei.workout.data.model.UiState
+import com.mutabei.workout.data.model.UnifiedDailyContext
 import com.mutabei.workout.data.model.UserConfig
 import com.mutabei.workout.data.model.WorkoutDefaults
 import com.mutabei.workout.data.model.WorkoutSession
@@ -77,7 +80,7 @@ import kotlin.math.roundToInt
 
 private const val TAG = "MainViewModel"
 
-enum class MainTab { WORKOUT, NUTRITION, BODY }
+enum class MainTab { WORKOUT, NUTRITION, STEPS, BODY }
 
 data class RestTimerState(
     val visible: Boolean = false,
@@ -241,8 +244,8 @@ class MainViewModel(
             initialValue = UiState.Loading
         )
 
-    private val _selectedTab = MutableStateFlow(MainTab.WORKOUT)
-    val selectedTab: StateFlow<MainTab> = _selectedTab.asStateFlow()
+    private val _selectedTab = MutableStateFlow<MainTab?>(null)
+    val selectedTab: StateFlow<MainTab?> = _selectedTab.asStateFlow()
 
     private val _selectedDayIndex = MutableStateFlow(0)
     val selectedDayIndex: StateFlow<Int> = _selectedDayIndex.asStateFlow()
@@ -259,6 +262,12 @@ class MainViewModel(
 
     private val _workoutSyncedNutritionEnabled = MutableStateFlow(true)
     val workoutSyncedNutritionEnabled: StateFlow<Boolean> = _workoutSyncedNutritionEnabled.asStateFlow()
+
+    private val _defaultStepTarget = MutableStateFlow(StepsBurnEngine.DEFAULT_STEP_TARGET)
+    val defaultStepTarget: StateFlow<Int> = _defaultStepTarget.asStateFlow()
+
+    private val _defaultStepBufferFactor = MutableStateFlow(StepsBurnEngine.DEFAULT_BUFFER_FACTOR)
+    val defaultStepBufferFactor: StateFlow<Double> = _defaultStepBufferFactor.asStateFlow()
 
     fun setRollingCalorieBudgetEnabled(enabled: Boolean) {
         _rollingCalorieBudgetEnabled.value = enabled
@@ -345,6 +354,11 @@ class MainViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             _rollingCalorieBudgetEnabled.value = nutritionV2Prefs.getBoolean("rolling_calorie_budget", true)
             _workoutSyncedNutritionEnabled.value = nutritionV2Prefs.getBoolean("workout_synced_nutrition", true)
+            _defaultStepTarget.value = nutritionV2Prefs.getInt("default_step_target", StepsBurnEngine.DEFAULT_STEP_TARGET)
+            _defaultStepBufferFactor.value = nutritionV2Prefs.getFloat(
+                "default_step_buffer",
+                StepsBurnEngine.DEFAULT_BUFFER_FACTOR.toFloat()
+            ).toDouble()
             _bodyTapeRecords.value = loadBodyTapeRecordsFromPrefs()
             offlineFoodRepo.ensureLoaded()
             syncRequestedYesterdayMealsOnce()
@@ -426,6 +440,10 @@ class MainViewModel(
 
     fun selectTab(tab: MainTab) {
         _selectedTab.value = tab
+    }
+
+    fun returnToHub() {
+        _selectedTab.value = null
     }
 
     fun selectWorkoutDay(dayIndex: Int) {
@@ -815,6 +833,106 @@ class MainViewModel(
         viewModelScope.launch {
             firestoreRepo.saveNutritionDay(currentUserId, updated)
         }
+    }
+
+    private fun updateSelectedDaySteps(transform: (NutritionDay) -> NutritionDay) {
+        val date = _selectedNutritionDate.value
+        val snap = currentSnapshot()
+        val fallbackDay = NutritionDay(
+            id = date,
+            userId = currentUserId,
+            date = date,
+            stepTarget = nutritionV2Prefs.getInt("default_step_target", com.mutabei.workout.data.model.StepsBurnEngine.DEFAULT_STEP_TARGET),
+            stepBufferFactor = nutritionV2Prefs.getFloat(
+                "default_step_buffer",
+                com.mutabei.workout.data.model.StepsBurnEngine.DEFAULT_BUFFER_FACTOR.toFloat()
+            ).toDouble()
+        )
+        val current = snap.nutritionDays[date] ?: fallbackDay
+        val updated = transform(current)
+        viewModelScope.launch {
+            val res = firestoreRepo.saveNutritionDay(currentUserId, updated)
+            if (res.isFailure) {
+                showToast("تعذّر حفظ الخطوات، جرّب تاني.")
+            }
+        }
+    }
+
+    fun adjustSteps(deltaSteps: Int) {
+        updateSelectedDaySteps { day ->
+            day.copy(steps = (day.steps + deltaSteps).coerceIn(0, 150000))
+        }
+    }
+
+    fun setSteps(steps: Int) {
+        updateSelectedDaySteps { day ->
+            day.copy(steps = steps.coerceIn(0, 150000))
+        }
+    }
+
+    fun setStepTarget(target: Int) {
+        val safeTarget = target.coerceIn(1000, 50000)
+        _defaultStepTarget.value = safeTarget
+        nutritionV2Prefs.edit().putInt("default_step_target", safeTarget).apply()
+        updateSelectedDaySteps { day ->
+            day.copy(stepTarget = safeTarget)
+        }
+    }
+
+    fun setStepBufferFactor(factor: Double) {
+        val safeFactor = factor.coerceIn(0.0, 1.0)
+        _defaultStepBufferFactor.value = safeFactor
+        nutritionV2Prefs.edit().putFloat("default_step_buffer", safeFactor.toFloat()).apply()
+        updateSelectedDaySteps { day ->
+            day.copy(stepBufferFactor = safeFactor)
+        }
+    }
+
+    fun setExtraCardioKcal(kcal: Int) {
+        updateSelectedDaySteps { day ->
+            day.copy(extraCardioKcal = kcal.coerceIn(0, 5000))
+        }
+    }
+
+    fun setKcalPerStepOverride(rate: Double) {
+        updateSelectedDaySteps { day ->
+            day.copy(kcalPerStepOverride = rate.coerceIn(0.0, 0.2))
+        }
+    }
+
+    /**
+     * Unified cross-section calculation hub connecting Body (`BMR = 1,600 kcal` reference + weight),
+     * Steps & Burn (`0% / 50% / 100%` buffer), Nutrition calorie/macro targets (protein-protected),
+     * and live Workout progress for any ISO date.
+     */
+    fun computeDailyContext(
+        snapshot: AppDataSnapshot,
+        date: String = todayIso(),
+        rollingBudgetEnabled: Boolean = _rollingCalorieBudgetEnabled.value,
+        workoutSyncedEnabled: Boolean = _workoutSyncedNutritionEnabled.value,
+        selectedDayIndex: Int = _selectedDayIndex.value,
+        workoutDrafts: Map<String, List<SetEntry>> = _workoutDrafts.value,
+        workoutTimer: WorkoutSessionTimerState = _workoutSessionTimer.value,
+        defaultStepTarget: Int = _defaultStepTarget.value,
+        defaultBufferFactor: Double = _defaultStepBufferFactor.value
+    ): UnifiedDailyContext {
+        val baseTargets = computeTargets(snapshot.config, snapshot.bodyRecords)
+        return ConnectedAppEngine.buildDailyContext(
+            date = date,
+            config = snapshot.config,
+            sessions = snapshot.sessions,
+            nutritionDays = snapshot.nutritionDays,
+            bodyRecords = snapshot.bodyRecords,
+            baseTargets = baseTargets,
+            rollingBudgetEnabled = rollingBudgetEnabled,
+            workoutSyncedEnabled = workoutSyncedEnabled,
+            defaultStepTarget = defaultStepTarget,
+            defaultBufferFactor = defaultBufferFactor,
+            selectedDayIndex = selectedDayIndex,
+            workoutDrafts = workoutDrafts,
+            isTimerRunning = workoutTimer.isRunning,
+            elapsedSeconds = workoutTimer.elapsedSeconds
+        )
     }
 
     fun addLoggedFood(food: FoodItem, grams: Double, mealIndex: Int) {

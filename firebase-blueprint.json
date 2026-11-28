@@ -52,14 +52,19 @@
       "required": ["userId", "date", "dayIndex", "note", "exercises", "createdAt", "updatedAt"]
     },
     "NutritionDay": {
-      "title": "Daily Nutrition Log",
-      "description": "Logged food items and water intake for a calendar day.",
+      "title": "Daily Nutrition & Steps Log",
+      "description": "Logged food items, water intake, daily steps, extra cardio burn, and calorie buffer factor for a calendar day.",
       "type": "object",
       "properties": {
         "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
         "date": { "type": "string", "description": "Calendar date YYYY-MM-DD." },
         "waterMl": { "type": "integer", "description": "Water intake in milliliters." },
-        "items": { "type": "array", "description": "Logged food entries with grams, mealIndex, and 33-nutrient vector." },
+        "items": { "type": "array", "description": "Logged food entries with grams, mealIndex, and 33-40 nutrient vector." },
+        "steps": { "type": "integer", "description": "Optional daily step count (0..150000)." },
+        "stepTarget": { "type": "integer", "description": "Optional daily step goal (1000..50000, default 10000)." },
+        "extraCardioKcal": { "type": "integer", "description": "Optional extra cardio/activity active burn in kcal (0..5000)." },
+        "stepBufferFactor": { "type": "number", "description": "Optional calorie translation buffer factor (0.0, 0.5 default, or 1.0)." },
+        "kcalPerStepOverride": { "type": "number", "description": "Optional manual kcal-per-step rate (0 means weight-aware auto default ~0.04)." },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp." },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp." }
       },

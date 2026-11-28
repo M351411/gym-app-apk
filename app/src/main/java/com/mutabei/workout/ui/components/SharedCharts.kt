@@ -36,6 +36,8 @@ import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -650,157 +652,198 @@ fun RestTimerOverlay(
     if (!state.visible) return
     val semantic = LocalSemanticColors.current
     val isPreAlert = !state.finished && state.remainingSeconds in 1..5
-    val ringColor = when {
+    val accentColor = when {
         state.finished -> semantic.ok
         isPreAlert -> semantic.warn
         else -> MaterialTheme.colorScheme.primary
     }
-    val trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
-    val progress = if (state.totalSeconds > 0) {
+    val rawProgress = if (state.totalSeconds > 0) {
         (state.remainingSeconds.toFloat() / state.totalSeconds.toFloat()).coerceIn(0f, 1f)
     } else 0f
+    val animatedProgress by animateFloatAsState(
+        targetValue = if (state.finished) 1f else rawProgress,
+        animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing),
+        label = "slim_rest_progress"
+    )
+    var showPresetsMenu by remember { mutableStateOf(false) }
 
     Surface(
-        shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(2.dp, ringColor),
-        shadowElevation = 10.dp,
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+        border = BorderStroke(1.dp, accentColor.copy(alpha = if (state.finished || isPreAlert) 0.55f else 0.28f)),
+        shadowElevation = 6.dp,
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
             .testTag("rest_timer_overlay")
     ) {
-        Box(modifier = Modifier.fillMaxWidth()) {
-            IconButton(
-                onClick = onDismiss,
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Ultra-slim top progress hairline
+            Box(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(2.dp)
-                    .size(34.dp)
-                    .testTag("timer_skip")
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.22f))
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.Close,
-                    contentDescription = stringResource(R.string.cd_close),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(animatedProgress)
+                        .height(3.dp)
+                        .background(accentColor)
                 )
             }
 
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(14.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(86.dp)
-                        .clip(CircleShape)
-                        .then(
-                            if (state.finished) {
-                                Modifier
-                                    .background(semantic.ok.copy(alpha = 0.14f))
-                                    .clickable(onClick = onDismiss)
-                                    .semantics { contentDescription = "يلا - إغلاق مؤقت الراحة" }
-                                    .testTag("timer_go_dismiss")
-                            } else {
-                                Modifier
-                            }
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val stroke = Stroke(width = 8.dp.toPx(), cap = StrokeCap.Round)
-                        drawArc(
-                            color = trackColor,
-                            startAngle = 0f,
-                            sweepAngle = 360f,
-                            useCenter = false,
-                            style = stroke
-                        )
-                        drawArc(
-                            color = ringColor,
-                            startAngle = -90f,
-                            sweepAngle = if (state.finished) 360f else 360f * progress,
-                            useCenter = false,
-                            style = stroke
-                        )
-                    }
+                // Start: Compact countdown / finished tap-to-go pill + preset menu
+                Box {
                     if (state.finished) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = "يلا",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = semantic.ok
-                            )
-                            Text(
-                                text = "اضغط",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = semantic.ok.copy(alpha = 0.85f)
-                            )
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = semantic.ok.copy(alpha = 0.16f),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable(onClick = onDismiss)
+                                .semantics { contentDescription = "يلا - إغلاق مؤقت الراحة" }
+                                .testTag("timer_go_dismiss")
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = "يلا ✓",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = semantic.ok
+                                )
+                                Text(
+                                    text = "الراحة خلصت",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
                         }
                     } else {
                         val m = state.remainingSeconds / 60
                         val s = state.remainingSeconds % 60
-                        Text(
-                            text = isolateLtr("$m:${s.toString().padStart(2, '0')}"),
-                            style = MaterialTheme.typography.titleLarge.copy(fontFeatureSettings = "tnum"),
-                            fontWeight = FontWeight.ExtraBold,
-                            color = if (isPreAlert) semantic.warn else MaterialTheme.colorScheme.onSurface
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { showPresetsMenu = true }
+                                .padding(horizontal = 6.dp, vertical = 4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Timer,
+                                contentDescription = "تغيير مدة الراحة",
+                                tint = accentColor,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = isolateLtr("$m:${s.toString().padStart(2, '0')}"),
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontSize = 18.sp,
+                                    fontFeatureSettings = "tnum"
+                                ),
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (isPreAlert) semantic.warn else MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (isPreAlert) "جهّز" else isolateLtr("Rest"),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isPreAlert) semantic.warn else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = showPresetsMenu,
+                        onDismissRequest = { showPresetsMenu = false },
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ) {
+                        listOf(90, 120, 180, 240, 300).forEach { sec ->
+                            val label = if (sec % 60 == 0) {
+                                "${isolateLtr("${sec / 60}")} د"
+                            } else {
+                                isolateLtr("${sec / 60}:${(sec % 60).toString().padStart(2, '0')}")
+                            }
+                            val active = sec == defaultPresetSeconds
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = "راحة $label",
+                                        fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    )
+                                },
+                                onClick = {
+                                    showPresetsMenu = false
+                                    onSelectPreset(sec)
+                                },
+                                modifier = Modifier.testTag("timer_preset_${sec / 60}")
+                            )
+                        }
                     }
                 }
 
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Spacer(Modifier.weight(1f))
+
+                // Quick -30s / +30s compact pills
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onAdjust(-30) }
+                        .testTag("timer_minus_30")
+                ) {
                     Text(
-                        text = when {
-                            state.finished -> "الراحة خلصت. اضغط «يلا» للمجموعة الجاية!"
-                            isPreAlert -> "جهّز نفسك للمجموعة الجاية..."
-                            else -> "استريح"
-                        },
-                        style = MaterialTheme.typography.titleSmall,
-                        color = when {
-                            state.finished -> semantic.ok
-                            isPreAlert -> semantic.warn
-                            else -> MaterialTheme.colorScheme.onSurface
-                        },
-                        modifier = Modifier.padding(end = 28.dp)
+                        text = isolateLtr("-30s"),
+                        style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = { onAdjust(-30) },
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
-                            modifier = Modifier.testTag("timer_minus_30")
-                        ) { Text(isolateLtr("-30")) }
-                        OutlinedButton(
-                            onClick = { onAdjust(30) },
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
-                            modifier = Modifier.testTag("timer_plus_30")
-                        ) { Text(isolateLtr("+30")) }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf(120, 180, 240, 300).forEach { sec ->
-                            val active = sec == defaultPresetSeconds
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.background,
-                                border = BorderStroke(1.dp, if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline),
-                                modifier = Modifier
-                                    .clickable { onSelectPreset(sec) }
-                                    .testTag("timer_preset_${sec / 60}")
-                            ) {
-                                Text(
-                                    text = "${sec / 60} د",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                )
-                            }
-                        }
-                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onAdjust(30) }
+                        .testTag("timer_plus_30")
+                ) {
+                    Text(
+                        text = isolateLtr("+30s"),
+                        style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                    )
+                }
+
+                // Quick dismiss / skip action
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .testTag("timer_skip")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = stringResource(R.string.cd_close),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
             }
         }

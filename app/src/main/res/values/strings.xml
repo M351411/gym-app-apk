@@ -4,6 +4,7 @@
     <string name="app_header_title">عنتيل المحله</string>
     <string name="nav_workouts">التمرين</string>
     <string name="nav_nutrition">التغذية</string>
+    <string name="nav_steps">الخطوات والحرق</string>
     <string name="nav_body">الجسم</string>
     <string name="settings_title">الإعدادات والنسخة الاحتياطية</string>
     <string name="sign_in_title">عنتيل المحله</string>

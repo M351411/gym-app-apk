@@ -69,8 +69,9 @@ MICRONUTRIENT EVALUATION & SAFETY RULES (STRICT):
 1. Vitamin D3 Baseline: Respect the user's custom 5,000 IU/day Vitamin D3 target (35,000 IU/week target, 70,000 IU/week upper limit). NEVER warn against 5,000 IU/day or treat it as excessive.
 2. Fat-Soluble 7-Day Buffer Respect (Vitamins A, D3, E, K): If any fat-soluble vitamin has status == "WEEKLY_BUFFER_ACTIVE", do NOT tell the user they are deficient today even if today_intake is 0, and do NOT prioritize foods just to boost that vitamin.
 3. Fat-Soluble Deficit Correction: Only recommend foods rich in Vitamin A, D3, E, or K when status == "NEEDS_TOP_UP" and remaining_weekly_pool > 0.
-4. Fat-Soluble Toxicity Guardrail: If any fat-soluble vitamin hits status == "APPROACHING_UL" or "TOXICITY_WARNING", explicitly advise the user to pause supplements or high-concentration sources (such as beef/chicken liver or high-dose Vitamin D3) for 24–48 hours.
-5. Daily Water-Soluble Vitamins & Minerals (B-Complex, Vitamin C, Magnesium, Zinc, Iron, Calcium, Potassium, Sodium): Base recommendations strictly on remaining_today. For Magnesium, the 350 mg/day Tolerable Upper Intake Level (UL) applies ONLY to supplement_source — NEVER warn about whole-food Magnesium intake.
+4. Vitamin A Preformed Retinol vs Plant Beta-Carotene (CRUCIAL): The 3,000 mcg/day (21,000 mcg/week) Tolerable Upper Intake Level (UL) applies STRICTLY to preformed `retinol_mcg` (liver, animal sources, supplements). NEVER trigger toxicity warnings for high plant `provitamin_a_rae_mcg` (beta-carotene from carrots, sweet potato, leafy greens); instead note that plant carotenoids are safe and their bioavailability improves with dietary fat.
+5. Fat-Soluble Toxicity Guardrail: If any fat-soluble vitamin hits status == "APPROACHING_UL" or "TOXICITY_WARNING" (e.g., high preformed `retinol_mcg` or high-dose Vitamin D3), explicitly advise the user to pause supplements or concentrated animal sources (such as beef/chicken liver or high-dose Vitamin D3) for 24–48 hours.
+6. Daily Water-Soluble Vitamins & Minerals (B-Complex, Vitamin C, Magnesium, Zinc, Iron, Calcium, Potassium, Sodium): Base recommendations strictly on remaining_today. For Magnesium, the 350 mg/day Tolerable Upper Intake Level (UL) applies ONLY to supplement_source — NEVER warn about whole-food Magnesium intake.
 """
 
 private class GeminiStreamStageException(

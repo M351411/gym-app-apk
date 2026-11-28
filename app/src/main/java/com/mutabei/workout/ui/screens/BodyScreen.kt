@@ -28,12 +28,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.AccessibilityNew
 import androidx.compose.material.icons.rounded.AddAPhoto
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.ShowChart
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Warning
@@ -89,9 +91,13 @@ import com.mutabei.workout.ui.components.subtleCardBorderColor
 import com.mutabei.workout.ui.components.tactilePressScale
 import com.mutabei.workout.ui.theme.LocalSemanticColors
 import com.mutabei.workout.ui.util.rememberImageCaptureController
+import com.mutabei.workout.data.model.todayIso
 import com.mutabei.workout.ui.viewmodel.AppDataSnapshot
 import com.mutabei.workout.ui.viewmodel.BodyDraftState
+import com.mutabei.workout.ui.viewmodel.MainTab
 import com.mutabei.workout.ui.viewmodel.MainViewModel
+import java.text.NumberFormat
+import java.util.Locale
 import kotlin.math.roundToInt
 
 private data class BodyMetricSpec(
@@ -158,9 +164,17 @@ fun BodyScreen(
     val latestRecord = sortedRecords.lastOrNull()
     val prevRecord = if (sortedRecords.size >= 2) sortedRecords[sortedRecords.size - 2] else null
     val tapeRecords by viewModel.bodyTapeRecords.collectAsStateWithLifecycle()
-    val currentTargets = remember(snapshot.config, snapshot.bodyRecords) {
-        viewModel.computeTargets(snapshot.config, snapshot.bodyRecords)
+    val defaultStepTarget by viewModel.defaultStepTarget.collectAsStateWithLifecycle()
+    val defaultStepBuffer by viewModel.defaultStepBufferFactor.collectAsStateWithLifecycle()
+    val dailyContext = remember(snapshot, defaultStepTarget, defaultStepBuffer) {
+        viewModel.computeDailyContext(
+            snapshot = snapshot,
+            date = todayIso(),
+            defaultStepTarget = defaultStepTarget,
+            defaultBufferFactor = defaultStepBuffer
+        )
     }
+    val currentTargets = dailyContext.baseTargets
 
     var showInBodySheet by remember { mutableStateOf(false) }
     var deleteDialogDate by remember { mutableStateOf<String?>(null) }
@@ -283,6 +297,92 @@ fun BodyScreen(
                             contentDescription = "مسح ورقة InBody",
                             tint = MaterialTheme.colorScheme.onPrimary,
                             modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+            }
+
+            // 1b. Resting BMR Reference Strip (BMR = 1,600 kcal baseline or latest InBody BMR) -> linked to Steps & Burn
+            item(key = "resting_bmr_reference") {
+                val nf = remember { NumberFormat.getIntegerInstance(Locale.US) }
+                val stepsBurn = dailyContext.stepsBurn
+                val bmrAccent = Color(0xFF14B8A6)
+                val bmrSubline = if (dailyContext.isBmrFromInBody) {
+                    "حرق الراحة الأساسي (InBody) · TDEE ~${nf.format(stepsBurn.estimatedTdeeKcal)} kcal"
+                } else {
+                    "حرق الراحة المرجعي · TDEE ~${nf.format(stepsBurn.estimatedTdeeKcal)} kcal"
+                }
+                Surface(
+                    shape = MaterialTheme.shapes.medium,
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, subtleCardBorderColor()),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.medium)
+                        .clickable {
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            viewModel.selectTab(MainTab.STEPS)
+                        }
+                        .testTag("body_bmr_reference_card")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = bmrAccent.copy(alpha = 0.14f),
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Rounded.LocalFireDepartment,
+                                    contentDescription = null,
+                                    tint = bmrAccent,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = isolateLtr("BMR = ${nf.format(dailyContext.bmrReferenceKcal)} kcal"),
+                                style = MaterialTheme.typography.titleSmall.copy(fontFeatureSettings = "tnum"),
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = bmrSubline,
+                                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(99.dp),
+                            color = bmrAccent.copy(alpha = 0.12f)
+                        ) {
+                            Text(
+                                text = "الخطوات والحرق",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = bmrAccent,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                maxLines = 1
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                            contentDescription = "فتح الخطوات والحرق",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }

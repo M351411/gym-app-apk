@@ -52,7 +52,7 @@ fun FatSolubleDualIndicatorCard(
     }
 
     val badgeLabel: String = when {
-        eval.status == MicronutrientStatus.ON_TRACK && isCoveredByCarryIn -> "مُغطى اليوم (مُرحّل)"
+        eval.status == MicronutrientStatus.ON_TRACK && isCoveredByCarryIn -> "مُغطى اليوم · مُرحّل"
         eval.status == MicronutrientStatus.ON_TRACK && eval.todayIntake >= eval.dailyTargetBase -> "مُغطى اليوم"
         else -> eval.uiBadge
     }
@@ -139,7 +139,7 @@ fun FatSolubleDualIndicatorCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "اليوم",
+                    text = if (eval.key == "vA") "اليوم (${isolateLtr("RAE")})" else "اليوم",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -166,6 +166,12 @@ fun FatSolubleDualIndicatorCard(
                     style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                     fontWeight = FontWeight.SemiBold,
                     color = semantic.ok
+                )
+            } else if (eval.key == "vA" && eval.todayIntake > 0.0) {
+                Text(
+                    text = "اليوم: ${isolateLtr("Retinol")} ${isolateLtr("${fmtMicro(eval.todayRetinolMcg, "mcg")} mcg")} · ${isolateLtr("Beta-carotene (RAE)")} ${isolateLtr("${fmtMicro(eval.todayProvitaminARaeMcg, "mcg")} mcg")}",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else if (eval.todaySupplementSource > 0.0 && eval.todayFoodSource > 0.0) {
                 Text(
@@ -208,7 +214,7 @@ fun FatSolubleDualIndicatorCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "متوسط ${isolateLtr("7")} أيام: ${isolateLtr("${fmtMicro(eval.sevenDayAvg, eval.unit)} ${eval.unit}")}/يوم",
+                    text = "متوسط ${isolateLtr("7-day rolling")}: ${isolateLtr("${fmtMicro(eval.sevenDayAvg, eval.unit)} ${eval.unit}")}/يوم",
                     style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -224,7 +230,50 @@ fun FatSolubleDualIndicatorCard(
                 )
             }
 
-            // Safety guardrail for APPROACHING_UL / TOXICITY_WARNING
+            // Vitamin A 7-day Retinol vs Plant Beta-Carotene breakdown line
+            if (eval.key == "vA" && eval.sevenDayTotal > 0.0) {
+                Text(
+                    text = "خلال ${isolateLtr("7")} أيام: ${isolateLtr("Retinol")} ${isolateLtr("${fmtMicro(eval.sevenDayRetinolMcg, "mcg")} mcg")} (حد ${isolateLtr("UL")} اليومي ${isolateLtr("3000 mcg")}) · ${isolateLtr("Beta-carotene")} ${isolateLtr("${fmtMicro(eval.sevenDayProvitaminARaeMcg, "mcg")} mcg RAE")}",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // Calm non-alarmist Egyptian Arabic note for high plant Provitamin A + fat Bioavailability tip
+            if (eval.key == "vA" && eval.highCarotenoidSafeNoteActive) {
+                val infoAccent = MaterialTheme.colorScheme.primary
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = infoAccent.copy(alpha = 0.10f),
+                    border = BorderStroke(1.dp, infoAccent.copy(alpha = 0.35f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("vitamin_a_carotenoid_safe_note")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Text(
+                            text = "معظم فيتامين A عندك من مصادر نباتية (${isolateLtr("Beta-carotene / RAE")}) — وده آمن تماماً ومفيهوش خطورة سمّية لأن حد الـ ${isolateLtr("UL")} (${isolateLtr("3000 mcg")}/يوم) يخص الـ ${isolateLtr("Retinol")} الحيواني والمكملات بس.",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (!eval.todayCarotenoidMealHasAdequateFat) {
+                                "💡 نصيحة ${isolateLtr("Bioavailability")}: ضيف دهون صحية مع الجزر أو الخضار في نفس الوجبة (زي زيت زيتون، بيض، أو مكسرات) عشان جسمك يمتص الـ ${isolateLtr("Beta-carotene")} بكفاءة أعلى."
+                            } else {
+                                "💡 ملحوظة ${isolateLtr("Bioavailability")}: امتصاص الـ ${isolateLtr("Beta-carotene")} بيكون أفضل دايماً لما يتاكل مع مصدر دهون صحية في الوجبة."
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // Safety guardrail for APPROACHING_UL / TOXICITY_WARNING (strictly Preformed Retinol for Vitamin A)
             if (eval.status == MicronutrientStatus.TOXICITY_WARNING ||
                 eval.status == MicronutrientStatus.APPROACHING_UL
             ) {
@@ -235,20 +284,35 @@ fun FatSolubleDualIndicatorCard(
                     shape = RoundedCornerShape(8.dp),
                     color = guardrailColor.copy(alpha = 0.12f),
                     border = BorderStroke(1.dp, guardrailColor.copy(alpha = 0.4f)),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("fat_soluble_ul_warning_${eval.key}")
                 ) {
-                    Text(
-                        text = buildString {
+                    val warningText = if (eval.key == "vA") {
+                        buildString {
                             if (isTox) {
-                                append("وصلت للحد الأسبوعي الآمن")
+                                append("تنبيه ${isolateLtr("UL")} للـ ${isolateLtr("Retinol")}: استهلاكك من فيتامين A الحيواني/المكملات (${isolateLtr("Retinol")}) وصل أو عدّى الحد الآمن")
                             } else {
-                                append("اقتربت من الحد الأسبوعي الآمن")
+                                append("قربت من الحد الآمن (${isolateLtr("UL")}) للـ ${isolateLtr("Retinol")} الحيواني/المكملات")
+                            }
+                            append(" (${isolateLtr("${fmtMicro(eval.todayRetinolMcg, "mcg")} / 3000 mcg")} اليوم · ${isolateLtr("${fmtMicro(eval.sevenDayRetinolMcg, "mcg")} / 21000 mcg")} خلال ${isolateLtr("7")} أيام). ")
+                            append("الأفضل توقف الكبدة أو مكملات الـ ${isolateLtr("Retinol")} لمدة ${isolateLtr("24–48")} ساعة — أما المصادر النباتية (${isolateLtr("Beta-carotene")}) فملهاش نفس خطورة السمّية.")
+                        }
+                    } else {
+                        buildString {
+                            if (isTox) {
+                                append("وصلت للحد الأسبوعي الآمن (${isolateLtr("UL")})")
+                            } else {
+                                append("اقتربت من الحد الأسبوعي الآمن (${isolateLtr("UL")})")
                             }
                             if (ulVal != null) {
-                                append(" (${fmtMicro(ulVal, eval.unit)} ${eval.unit}/أسبوع)")
+                                append(" (${isolateLtr("${fmtMicro(ulVal, eval.unit)} ${eval.unit}")}/أسبوع)")
                             }
-                            append(". يُنصح بإيقاف المكملات أو المصادر المركّزة (مثل الكبدة أو الجرعات العالية) لمدة 24–48 ساعة.")
-                        },
+                            append(". يُنصح بإيقاف المكملات أو الجرعات العالية لمدة ${isolateLtr("24–48")} ساعة.")
+                        }
+                    }
+                    Text(
+                        text = warningText,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
                         color = guardrailColor,

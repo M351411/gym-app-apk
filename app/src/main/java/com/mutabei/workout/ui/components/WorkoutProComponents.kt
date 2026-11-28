@@ -67,8 +67,12 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.mutabei.workout.data.model.ExerciseSpec
+import com.mutabei.workout.data.model.HintLevel
+import com.mutabei.workout.data.model.RepHint
 import com.mutabei.workout.data.model.SetEntry
 import com.mutabei.workout.ui.theme.LocalSemanticColors
 import com.mutabei.workout.ui.viewmodel.ExerciseHistoryPoint
@@ -310,6 +314,152 @@ fun SetGoalTargetIcon(
                         text = goal.title,
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.ExtraBold,
+                        color = accent
+                    )
+                }
+                Surface(
+                    shape = MaterialTheme.shapes.small,
+                    color = accent.copy(alpha = 0.12f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = goal.targetLine,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+                Text(
+                    text = goal.detailLine,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (goal.suggestedWeightKg != null) {
+                    val wStr = fmtWeightKg(goal.suggestedWeightKg)
+                    OutlinedButton(
+                        onClick = {
+                            onApplyWeight(wStr)
+                            expanded = false
+                        },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "طبّق $wStr كجم في المجموعة ${goal.setNumber}",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Compact, scannable Progressive Overload status chip inside each set row.
+ * - When reps are logged: shows a crisp badge (`↑ +وزن`, `= ثبّت`, `↓ -وزن`).
+ * - Before reps are logged: shows a subtle, quiet target cue (`◎` or `↑`).
+ * - Single tap opens the exact Progressive Overload target popover with 1-tap apply weight.
+ */
+@Composable
+fun SetOverloadCueChip(
+    goal: SetTargetGoal,
+    repHint: RepHint?,
+    testTag: String,
+    onApplyWeight: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val semantic = LocalSemanticColors.current
+    val haptic = LocalHapticFeedback.current
+    var expanded by remember { mutableStateOf(false) }
+
+    val badgeLabel: String? = when (repHint?.level) {
+        HintLevel.HIGH -> "↑ +وزن"
+        HintLevel.OK -> "= ثبّت"
+        HintLevel.LOW -> "↓ -وزن"
+        null -> null
+    }
+
+    val accent = when (repHint?.level) {
+        HintLevel.HIGH -> semantic.warn
+        HintLevel.OK -> semantic.ok
+        HintLevel.LOW -> semantic.low
+        null -> when (goal.kind) {
+            SetGoalKind.INCREASE -> semantic.ok
+            SetGoalKind.HOLD_OR_FIX -> semantic.warn
+            SetGoalKind.PROGRESS -> MaterialTheme.colorScheme.primary
+            SetGoalKind.FIRST_SESSION -> MaterialTheme.colorScheme.onSurfaceVariant
+        }
+    }
+
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = if (badgeLabel != null) accent.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            modifier = Modifier
+                .height(38.dp)
+                .width(62.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .clickable {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    expanded = true
+                }
+                .semantics { contentDescription = "هدف المجموعة ${goal.setNumber}" }
+                .testTag(testTag)
+        ) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 4.dp)) {
+                if (badgeLabel != null) {
+                    Text(
+                        text = badgeLabel,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                        fontWeight = FontWeight.Bold,
+                        color = accent,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip
+                    )
+                } else {
+                    Icon(
+                        imageVector = if (goal.kind == SetGoalKind.INCREASE) {
+                            Icons.Rounded.ArrowUpward
+                        } else {
+                            Icons.Rounded.TrackChanges
+                        },
+                        contentDescription = null,
+                        tint = accent.copy(alpha = 0.85f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, accent.copy(alpha = 0.35f)),
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.widthIn(min = 230.dp, max = 300.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.TrackChanges,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(17.dp)
+                    )
+                    Text(
+                        text = "${goal.title} · ${isolateLtr("Progressive Overload")}",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
                         color = accent
                     )
                 }

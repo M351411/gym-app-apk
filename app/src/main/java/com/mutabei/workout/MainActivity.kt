@@ -34,7 +34,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.foundation.BorderStroke
@@ -61,8 +63,11 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.FitnessCenter
+import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.MonitorWeight
 import androidx.compose.material.icons.rounded.Restaurant
 import androidx.compose.material.icons.rounded.Settings
@@ -136,7 +141,9 @@ import com.mutabei.workout.ui.screens.AuthScreen
 import com.mutabei.workout.ui.screens.BodyScreen
 import com.mutabei.workout.ui.screens.CoachTodayMacroStatus
 import com.mutabei.workout.ui.screens.NutritionScreen
+import com.mutabei.workout.ui.screens.SectionHubScreen
 import com.mutabei.workout.ui.screens.SettingsSheet
+import com.mutabei.workout.ui.screens.StepsAndBurnScreen
 import com.mutabei.workout.ui.screens.WorkoutScreen
 import com.mutabei.workout.ui.theme.LocalSemanticColors
 import com.mutabei.workout.ui.theme.MutabeiTheme
@@ -214,6 +221,7 @@ private data class NavDestination(
 private val NAV_DESTINATIONS = listOf(
     NavDestination(MainTab.WORKOUT, R.string.nav_workouts, Icons.Rounded.FitnessCenter, "nav_workout"),
     NavDestination(MainTab.NUTRITION, R.string.nav_nutrition, Icons.Rounded.Restaurant, "nav_nutrition"),
+    NavDestination(MainTab.STEPS, R.string.nav_steps, Icons.AutoMirrored.Rounded.DirectionsWalk, "nav_steps"),
     NavDestination(MainTab.BODY, R.string.nav_body, Icons.Rounded.MonitorWeight, "nav_body")
 )
 
@@ -292,8 +300,8 @@ private fun MainAppShell(user: FirebaseUser) {
         }
     }
 
-    BackHandler(enabled = selectedTab != MainTab.WORKOUT) {
-        viewModel.selectTab(MainTab.WORKOUT)
+    BackHandler(enabled = selectedTab != null) {
+        viewModel.returnToHub()
     }
 
     MutabeiTheme(themeMode = themeMode) {
@@ -318,6 +326,21 @@ private fun MainAppShell(user: FirebaseUser) {
                             containerColor = MaterialTheme.colorScheme.surface,
                             modifier = Modifier.fillMaxHeight()
                         ) {
+                            NavigationRailItem(
+                                selected = selectedTab == null,
+                                onClick = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    viewModel.returnToHub()
+                                },
+                                icon = {
+                                    Icon(
+                                        imageVector = Icons.Rounded.GridView,
+                                        contentDescription = "الرئيسية"
+                                    )
+                                },
+                                label = { Text("الرئيسية") },
+                                modifier = Modifier.testTag("nav_hub")
+                            )
                             NAV_DESTINATIONS.forEach { dest ->
                                 NavigationRailItem(
                                     selected = selectedTab == dest.tab,
@@ -352,48 +375,103 @@ private fun MainAppShell(user: FirebaseUser) {
                                     containerColor = MaterialTheme.colorScheme.background,
                                     titleContentColor = MaterialTheme.colorScheme.onBackground
                                 ),
-                                title = {
-                                    // Minimal sleek single-row header with compact week pill badge
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                navigationIcon = {
+                                    AnimatedVisibility(
+                                        visible = selectedTab != null,
+                                        enter = fadeIn(tween(200)) + scaleIn(initialScale = 0.85f, animationSpec = tween(200)),
+                                        exit = fadeOut(tween(150)) + scaleOut(targetScale = 0.85f, animationSpec = tween(150))
                                     ) {
-                                        Text(
-                                            text = stringResource(R.string.app_header_title),
-                                            style = MaterialTheme.typography.titleLarge,
-                                            fontWeight = FontWeight.Black,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        if (snapshot != null) {
-                                            val week = viewModel.computeWeekNumber(snapshot.config.startDate)
-                                            val pillLabel = if (week <= 12) "أسبوع ${isolateLtr("$week/12")}" else "✓ 12/12"
-                                            Surface(
-                                                shape = RoundedCornerShape(999.dp),
-                                                color = MaterialTheme.colorScheme.surface,
-                                                border = BorderStroke(1.dp, subtleCardBorderColor())
+                                        IconButton(
+                                            onClick = {
+                                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                viewModel.returnToHub()
+                                            },
+                                            modifier = Modifier.testTag("hub_back_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                                                contentDescription = "العودة للرئيسية"
+                                            )
+                                        }
+                                    }
+                                },
+                                title = {
+                                    AnimatedContent(
+                                        targetState = selectedTab,
+                                        transitionSpec = {
+                                            fadeIn(tween(200)) togetherWith fadeOut(tween(140))
+                                        },
+                                        label = "topbar_title_transition"
+                                    ) { currentSection ->
+                                        if (currentSection == null) {
+                                            // Hub Header: Brand title + compact week pill
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                                             ) {
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
-                                                ) {
-                                                    Box(
-                                                        modifier = Modifier
-                                                            .size(6.dp)
-                                                            .clip(CircleShape)
-                                                            .background(if (isOnline) semantic.ok else semantic.warn)
-                                                    )
-                                                    Text(
-                                                        text = pillLabel,
-                                                        style = MaterialTheme.typography.labelSmall.copy(
-                                                            fontFeatureSettings = "tnum"
-                                                        ),
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                        maxLines = 1
-                                                    )
+                                                Text(
+                                                    text = stringResource(R.string.app_header_title),
+                                                    style = MaterialTheme.typography.titleLarge,
+                                                    fontWeight = FontWeight.Black,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                if (snapshot != null) {
+                                                    val week = viewModel.computeWeekNumber(snapshot.config.startDate)
+                                                    val pillLabel = if (week <= 12) "أسبوع ${isolateLtr("$week/12")}" else "✓ 12/12"
+                                                    Surface(
+                                                        shape = RoundedCornerShape(999.dp),
+                                                        color = MaterialTheme.colorScheme.surface,
+                                                        border = BorderStroke(1.dp, subtleCardBorderColor())
+                                                    ) {
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                                                        ) {
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .size(6.dp)
+                                                                    .clip(CircleShape)
+                                                                    .background(if (isOnline) semantic.ok else semantic.warn)
+                                                            )
+                                                            Text(
+                                                                text = pillLabel,
+                                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                                    fontFeatureSettings = "tnum"
+                                                                ),
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                                maxLines = 1
+                                                            )
+                                                        }
+                                                    }
                                                 }
+                                            }
+                                        } else {
+                                            // Section Detail Header: Clean Arabic section title + subtle English tag
+                                            val (titleAr, titleEn) = when (currentSection) {
+                                                MainTab.WORKOUT -> "التمرين" to "Workout"
+                                                MainTab.NUTRITION -> "التغذية" to "Nutrition"
+                                                MainTab.STEPS -> "الخطوات والحرق" to "Steps & Burn"
+                                                MainTab.BODY -> "الجسم" to "Body"
+                                            }
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                Text(
+                                                    text = titleAr,
+                                                    style = MaterialTheme.typography.titleLarge,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    maxLines = 1
+                                                )
+                                                Text(
+                                                    text = isolateLtr(titleEn),
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1
+                                                )
                                             }
                                         }
                                     }
@@ -404,7 +482,7 @@ private fun MainAppShell(user: FirebaseUser) {
                                         Surface(
                                             shape = RoundedCornerShape(99.dp),
                                             color = timerAccent.copy(alpha = 0.14f),
-                                            border = BorderStroke(1.dp, timerAccent.copy(alpha = 0.6f)),
+                                            border = BorderStroke(1.dp, timerAccent.copy(alpha = 0.55f)),
                                             modifier = Modifier
                                                 .padding(end = 4.dp)
                                                 .clip(RoundedCornerShape(99.dp))
@@ -460,19 +538,6 @@ private fun MainAppShell(user: FirebaseUser) {
                                     }
                                 }
                             )
-                        },
-                        bottomBar = {
-                            if (!useRail) {
-                                FloatingPillBottomBar(
-                                    selectedTab = selectedTab,
-                                    onSelectTab = { tab ->
-                                        if (tab != selectedTab) {
-                                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                            viewModel.selectTab(tab)
-                                        }
-                                    }
-                                )
-                            }
                         }
                     ) { innerPadding ->
                         Box(
@@ -547,40 +612,51 @@ private fun MainAppShell(user: FirebaseUser) {
                                 }
                             }
 
-                            // Floating Rest Timer Overlay / Scroll-aware FAB
+                            // Slim Non-Blocking Floating Rest Timer Pill / Scroll-aware FAB
                             if (snapshot != null) {
-                                if (restTimer.visible) {
+                                androidx.compose.animation.AnimatedVisibility(
+                                    visible = restTimer.visible,
+                                    enter = slideInVertically(
+                                        animationSpec = spring(
+                                            dampingRatio = 0.82f,
+                                            stiffness = Spring.StiffnessMediumLow
+                                        )
+                                    ) { it } + fadeIn(tween(180)),
+                                    exit = slideOutVertically(
+                                        animationSpec = tween(180)
+                                    ) { it } + fadeOut(tween(140)),
+                                    modifier = Modifier.align(Alignment.BottomCenter)
+                                ) {
                                     RestTimerOverlay(
                                         state = restTimer,
                                         defaultPresetSeconds = snapshot.config.restSeconds,
                                         onAdjust = viewModel::adjustRestTimer,
                                         onSelectPreset = viewModel::selectRestPreset,
-                                        onDismiss = viewModel::dismissRestTimer,
-                                        modifier = Modifier.align(Alignment.BottomCenter)
+                                        onDismiss = viewModel::dismissRestTimer
                                     )
-                                } else {
-                                    androidx.compose.animation.AnimatedVisibility(
-                                        visible = selectedTab == MainTab.WORKOUT && workoutFabVisible,
-                                        enter = scaleIn(
-                                            animationSpec = spring(
-                                                dampingRatio = 0.75f,
-                                                stiffness = Spring.StiffnessMedium
-                                            )
-                                        ) + fadeIn(tween(180)),
-                                        exit = scaleOut(
-                                            animationSpec = spring(
-                                                dampingRatio = 0.85f,
-                                                stiffness = Spring.StiffnessMedium
-                                            )
-                                        ) + fadeOut(tween(150)),
-                                        modifier = Modifier
-                                            .align(Alignment.BottomStart)
-                                            .padding(16.dp)
-                                    ) {
-                                        RestTimerFab(
-                                            onClick = { viewModel.startRestTimer() }
+                                }
+
+                                androidx.compose.animation.AnimatedVisibility(
+                                    visible = !restTimer.visible && selectedTab == MainTab.WORKOUT && workoutFabVisible,
+                                    enter = scaleIn(
+                                        animationSpec = spring(
+                                            dampingRatio = 0.75f,
+                                            stiffness = Spring.StiffnessMedium
                                         )
-                                    }
+                                    ) + fadeIn(tween(180)),
+                                    exit = scaleOut(
+                                        animationSpec = spring(
+                                            dampingRatio = 0.85f,
+                                            stiffness = Spring.StiffnessMedium
+                                        )
+                                    ) + fadeOut(tween(150)),
+                                    modifier = Modifier
+                                        .align(Alignment.BottomStart)
+                                        .padding(16.dp)
+                                ) {
+                                    RestTimerFab(
+                                        onClick = { viewModel.startRestTimer() }
+                                    )
                                 }
                             }
                         }
@@ -661,261 +737,67 @@ private fun StartupDashboardSkeleton() {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .widthIn(max = 640.dp)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .widthIn(max = 600.dp)
+                .padding(horizontal = 20.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Split chips skeleton strip
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(84.dp, 92.dp, 72.dp, 78.dp).forEach { chipW ->
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = surfaceColor,
-                        border = BorderStroke(1.dp, borderColor),
-                        modifier = Modifier
-                            .width(chipW)
-                            .height(34.dp)
-                            .alpha(pulseAlpha)
-                    ) {}
-                }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    modifier = Modifier
+                        .width(100.dp)
+                        .height(12.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(blockColor)
+                )
+                Box(
+                    modifier = Modifier
+                        .width(180.dp)
+                        .height(22.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(blockColor)
+                )
             }
 
-            // Sub-view switcher skeleton
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = surfaceColor,
-                border = BorderStroke(1.dp, borderColor),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(44.dp)
-                    .alpha(pulseAlpha)
-            ) {}
-
-            // Progress hero skeleton card
-            Surface(
-                shape = MaterialTheme.shapes.medium,
-                color = surfaceColor,
-                border = BorderStroke(1.dp, borderColor),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .width(150.dp)
-                                .height(16.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(blockColor)
-                        )
-                        Box(
-                            modifier = Modifier
-                                .width(48.dp)
-                                .height(22.dp)
-                                .clip(RoundedCornerShape(99.dp))
-                                .background(blockColor)
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(9.dp)
-                            .clip(RoundedCornerShape(99.dp))
-                            .background(blockColor)
-                    )
-                }
-            }
-
-            // Two compact exercise card skeletons
-            repeat(2) {
+            // Four calm Hub card skeletons
+            repeat(4) {
                 Surface(
-                    shape = MaterialTheme.shapes.medium,
+                    shape = RoundedCornerShape(22.dp),
                     color = surfaceColor,
                     border = BorderStroke(1.dp, borderColor),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(104.dp)
                 ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 20.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        Box(
+                            modifier = Modifier
+                                .size(52.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(blockColor)
+                        )
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(38.dp)
-                                    .clip(RoundedCornerShape(10.dp))
+                                    .width(120.dp)
+                                    .height(16.dp)
+                                    .clip(RoundedCornerShape(6.dp))
                                     .background(blockColor)
                             )
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .width(160.dp)
-                                        .height(15.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(blockColor)
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .width(110.dp)
-                                        .height(11.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(blockColor)
-                                )
-                            }
-                        }
-                        repeat(2) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(42.dp)
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(blockColor)
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(42.dp)
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(blockColor)
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .size(42.dp)
-                                        .clip(CircleShape)
-                                        .background(blockColor)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FloatingPillBottomBar(
-    selectedTab: MainTab,
-    onSelectTab: (MainTab) -> Unit
-) {
-    var entered by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { entered = true }
-
-    val entranceOffsetY by animateDpAsState(
-        targetValue = if (entered) 0.dp else 36.dp,
-        animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessLow),
-        label = "nav_bar_entrance_offset"
-    )
-    val entranceAlpha by animateFloatAsState(
-        targetValue = if (entered) 1f else 0f,
-        animationSpec = tween(durationMillis = 260),
-        label = "nav_bar_entrance_alpha"
-    )
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .navigationBarsPadding()
-            .offset(y = entranceOffsetY)
-            .alpha(entranceAlpha)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-            border = BorderStroke(1.dp, subtleCardBorderColor()),
-            tonalElevation = 6.dp,
-            shadowElevation = 10.dp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .widthIn(max = 460.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                NAV_DESTINATIONS.forEach { dest ->
-                    val selected = selectedTab == dest.tab
-                    val pillColor by animateColorAsState(
-                        targetValue = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.17f) else Color.Transparent,
-                        animationSpec = tween(220),
-                        label = "nav_pill_color"
-                    )
-                    val contentColor by animateColorAsState(
-                        targetValue = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        animationSpec = tween(220),
-                        label = "nav_content_color"
-                    )
-                    val horizontalPad by animateDpAsState(
-                        targetValue = if (selected) 14.dp else 8.dp,
-                        animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow),
-                        label = "nav_pill_pad"
-                    )
-                    val indicatorWidth by animateDpAsState(
-                        targetValue = if (selected) 20.dp else 0.dp,
-                        animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow),
-                        label = "nav_indicator_width"
-                    )
-                    val interaction = remember { MutableInteractionSource() }
-
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = 52.dp)
-                            .tactilePressScale(interaction, pressedScale = 0.95f)
-                            .clip(RoundedCornerShape(22.dp))
-                            .background(pillColor)
-                            .clickable(
-                                interactionSource = interaction,
-                                indication = null
-                            ) { onSelectTab(dest.tab) }
-                            .padding(horizontal = horizontalPad, vertical = 6.dp)
-                            .testTag(dest.tag),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Icon(
-                                imageVector = dest.icon,
-                                contentDescription = stringResource(dest.labelRes),
-                                tint = contentColor,
-                                modifier = Modifier.size(22.dp)
-                            )
-                            Text(
-                                text = stringResource(dest.labelRes),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium,
-                                color = contentColor,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
                             Box(
                                 modifier = Modifier
-                                    .width(indicatorWidth)
-                                    .height(2.5.dp)
-                                    .clip(RoundedCornerShape(99.dp))
-                                    .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
+                                    .width(170.dp)
+                                    .height(12.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(blockColor)
                             )
                         }
                     }
@@ -927,7 +809,7 @@ private fun FloatingPillBottomBar(
 
 @Composable
 private fun ActiveTabContent(
-    tab: MainTab,
+    tab: MainTab?,
     snapshot: AppDataSnapshot,
     selectedDayIndex: Int,
     selectedNutritionDate: String,
@@ -948,19 +830,52 @@ private fun ActiveTabContent(
     AnimatedContent(
         targetState = tab,
         transitionSpec = {
-            val forward = targetState.ordinal >= initialState.ordinal
-            val dir = if (forward) (if (isRtl) -1 else 1) else (if (isRtl) 1 else -1)
-            val enter = fadeIn(tween(240)) + slideInHorizontally(
-                animationSpec = spring(dampingRatio = 0.86f, stiffness = Spring.StiffnessMediumLow)
-            ) { fullWidth -> dir * (fullWidth / 10) }
-            val exit = fadeOut(tween(180)) + slideOutHorizontally(
-                animationSpec = tween(180)
-            ) { fullWidth -> -dir * (fullWidth / 10) }
-            enter togetherWith exit
+            val ease = FastOutSlowInEasing
+            when {
+                // Hub -> Section Detail: snappy scale-in + fade + subtle directional glide (260ms)
+                initialState == null && targetState != null -> {
+                    val dir = if (isRtl) -1 else 1
+                    val enter = fadeIn(tween(240, easing = ease)) +
+                        scaleIn(initialScale = 0.96f, animationSpec = tween(260, easing = ease)) +
+                        slideInHorizontally(animationSpec = tween(260, easing = ease)) { it / 16 * dir }
+                    val exit = fadeOut(tween(180, easing = ease)) +
+                        scaleOut(targetScale = 0.97f, animationSpec = tween(200, easing = ease))
+                    enter togetherWith exit
+                }
+                // Section Detail -> Hub: crisp reverse settle back to the Hub (240ms)
+                initialState != null && targetState == null -> {
+                    val dir = if (isRtl) 1 else -1
+                    val enter = fadeIn(tween(220, easing = ease)) +
+                        scaleIn(initialScale = 0.97f, animationSpec = tween(240, easing = ease))
+                    val exit = fadeOut(tween(170, easing = ease)) +
+                        scaleOut(targetScale = 0.96f, animationSpec = tween(200, easing = ease)) +
+                        slideOutHorizontally(animationSpec = tween(200, easing = ease)) { it / 16 * dir }
+                    enter togetherWith exit
+                }
+                // Section -> Section (e.g., AI Coach jump or tablet NavigationRail)
+                else -> {
+                    val forward = (targetState?.ordinal ?: 0) >= (initialState?.ordinal ?: 0)
+                    val dir = if (forward) (if (isRtl) -1 else 1) else (if (isRtl) 1 else -1)
+                    val enter = fadeIn(tween(230, easing = ease)) +
+                        slideInHorizontally(animationSpec = tween(250, easing = ease)) { dir * (it / 12) }
+                    val exit = fadeOut(tween(170, easing = ease)) +
+                        slideOutHorizontally(animationSpec = tween(170, easing = ease)) { -dir * (it / 12) }
+                    enter togetherWith exit
+                }
+            }
         },
-        label = "main_tab_slide_fade"
-    ) { activeTab ->
-        when (activeTab) {
+        label = "hub_section_transition"
+    ) { activeSection ->
+        when (activeSection) {
+            null -> SectionHubScreen(
+                snapshot = snapshot,
+                selectedDayIndex = selectedDayIndex,
+                workoutDrafts = workoutDrafts,
+                workoutTimer = workoutTimer,
+                viewModel = viewModel,
+                onSelectSection = viewModel::selectTab
+            )
+
             MainTab.WORKOUT -> WorkoutScreen(
                 snapshot = snapshot,
                 selectedDayIndex = selectedDayIndex,
@@ -980,6 +895,12 @@ private fun ActiveTabContent(
                 macroTetrisAi = macroTetrisAi,
                 battleResultsA = battleResultsA,
                 battleResultsB = battleResultsB,
+                viewModel = viewModel
+            )
+
+            MainTab.STEPS -> StepsAndBurnScreen(
+                snapshot = snapshot,
+                selectedDate = selectedNutritionDate,
                 viewModel = viewModel
             )
 

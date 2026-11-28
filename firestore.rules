@@ -105,6 +105,11 @@ service cloud.firestore {
              data.waterMl is int && data.waterMl >= 0 && data.waterMl <= 20000 &&
              data.items is list && data.items.size() <= 100 &&
              (data.items.size() == 0 || data.items[0] is map) &&
+             isOptNum(data, 'steps', 0, 150000) &&
+             isOptNum(data, 'stepTarget', 1000, 50000) &&
+             isOptNum(data, 'extraCardioKcal', 0, 5000) &&
+             isOptNum(data, 'stepBufferFactor', 0, 1) &&
+             isOptNum(data, 'kcalPerStepOverride', 0, 0.2) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
@@ -220,7 +225,11 @@ service cloud.firestore {
         allow create: if isOwner(userId) &&
                          isValidId(dateId) &&
                          incoming().keys().hasAll(['userId', 'date', 'waterMl', 'items', 'createdAt', 'updatedAt']) &&
-                         incoming().keys().hasOnly(['userId', 'date', 'waterMl', 'items', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly([
+                           'userId', 'date', 'waterMl', 'items',
+                           'steps', 'stepTarget', 'extraCardioKcal', 'stepBufferFactor', 'kcalPerStepOverride',
+                           'createdAt', 'updatedAt'
+                         ]) &&
                          isValidNutritionDay(incoming(), userId);
 
         allow update: if isOwner(userId) &&
@@ -228,7 +237,11 @@ service cloud.firestore {
                          isValidNutritionDay(incoming(), userId) &&
                          incoming().userId == existing().userId &&
                          incoming().createdAt == existing().createdAt &&
-                         incoming().diff(existing()).affectedKeys().hasOnly(['date', 'waterMl', 'items', 'updatedAt']);
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'date', 'waterMl', 'items',
+                           'steps', 'stepTarget', 'extraCardioKcal', 'stepBufferFactor', 'kcalPerStepOverride',
+                           'updatedAt'
+                         ]);
 
         allow delete: if isOwner(userId) && isValidId(dateId);
       }

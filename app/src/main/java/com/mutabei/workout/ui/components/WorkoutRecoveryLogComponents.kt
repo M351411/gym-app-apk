@@ -72,9 +72,8 @@ fun WorkoutSubViewSwitcher(
 ) {
     val haptics = LocalHapticFeedback.current
     Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, subtleCardBorderColor()),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
         modifier = modifier
             .fillMaxWidth()
             .testTag("workout_subview_switcher")
@@ -82,7 +81,7 @@ fun WorkoutSubViewSwitcher(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(4.dp),
+                .padding(3.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -92,31 +91,31 @@ fun WorkoutSubViewSwitcher(
             ).forEach { (tab, label, icon) ->
                 val isSelected = selected == tab
                 val bgColor by animateColorAsState(
-                    targetValue = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else Color.Transparent,
-                    animationSpec = tween(220),
+                    targetValue = if (isSelected) MaterialTheme.colorScheme.surface else Color.Transparent,
+                    animationSpec = tween(200),
                     label = "subview_bg"
                 )
-                val borderColor by animateColorAsState(
-                    targetValue = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.55f) else Color.Transparent,
-                    animationSpec = tween(220),
-                    label = "subview_border"
-                )
                 val contentColor by animateColorAsState(
-                    targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    animationSpec = tween(220),
+                    targetValue = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                    animationSpec = tween(200),
                     label = "subview_content"
+                )
+                val iconTint by animateColorAsState(
+                    targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    animationSpec = tween(200),
+                    label = "subview_icon"
                 )
                 val interaction = remember { MutableInteractionSource() }
 
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(11.dp),
                     color = bgColor,
-                    border = BorderStroke(1.dp, borderColor),
+                    shadowElevation = if (isSelected) 1.dp else 0.dp,
                     modifier = Modifier
                         .weight(1f)
-                        .heightIn(min = 44.dp)
+                        .heightIn(min = 40.dp)
                         .tactilePressScale(interaction, pressedScale = 0.97f)
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(11.dp))
                         .clickable(
                             interactionSource = interaction,
                             indication = null
@@ -134,19 +133,19 @@ fun WorkoutSubViewSwitcher(
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp)
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)
                     ) {
                         Icon(
                             imageVector = icon,
                             contentDescription = null,
-                            tint = contentColor,
-                            modifier = Modifier.size(18.dp)
+                            tint = iconTint,
+                            modifier = Modifier.size(16.dp)
                         )
                         Spacer(Modifier.size(6.dp))
                         Text(
                             text = label,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.SemiBold,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                             color = contentColor,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis

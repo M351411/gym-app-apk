@@ -345,7 +345,10 @@ data class LoggedFoodItem(
     val source: String = "e",
     val grams: Double = 100.0,
     val mealIndex: Int = 0,
-    val nutrients: List<Double> = NutritionConstants.emptyNutrientVector()
+    val nutrients: List<Double> = NutritionConstants.emptyNutrientVector(),
+    val retinolMcgPer100g: Double? = null,
+    val provitaminARaeMcgPer100g: Double? = null,
+    val betaCaroteneMcgPer100g: Double? = null
 ) {
     fun nutrientAmount(key: String): Double {
         val idx = NutritionConstants.NUTRIENT_INDEX[key] ?: return 0.0
@@ -353,14 +356,17 @@ data class LoggedFoodItem(
         return if (v >= 0.0) v * grams / 100.0 else 0.0
     }
 
-    fun toMap(): Map<String, Any> = mapOf(
-        "id" to id,
-        "name" to name.take(200),
-        "source" to source,
-        "grams" to grams,
-        "mealIndex" to mealIndex.coerceIn(0, 4),
-        "nutrients" to normalizeNutrients(nutrients)
-    )
+    fun toMap(): Map<String, Any> = buildMap {
+        put("id", id)
+        put("name", name.take(200))
+        put("source", source)
+        put("grams", grams)
+        put("mealIndex", mealIndex.coerceIn(0, 4))
+        put("nutrients", normalizeNutrients(nutrients))
+        retinolMcgPer100g?.takeIf { it >= 0.0 }?.let { put("retinolMcgPer100g", it) }
+        provitaminARaeMcgPer100g?.takeIf { it >= 0.0 }?.let { put("provitaminARaeMcgPer100g", it) }
+        betaCaroteneMcgPer100g?.takeIf { it >= 0.0 }?.let { put("betaCaroteneMcgPer100g", it) }
+    }
 
     companion object {
         fun normalizeNutrients(list: List<Double>): List<Double> =
@@ -375,7 +381,10 @@ data class LoggedFoodItem(
                 source = (map["source"] as? String) ?: "e",
                 grams = (map["grams"] as? Number)?.toDouble() ?: 100.0,
                 mealIndex = ((map["mealIndex"] as? Number)?.toInt() ?: 0).coerceIn(0, 4),
-                nutrients = nut
+                nutrients = nut,
+                retinolMcgPer100g = (map["retinolMcgPer100g"] as? Number)?.toDouble(),
+                provitaminARaeMcgPer100g = (map["provitaminARaeMcgPer100g"] as? Number)?.toDouble(),
+                betaCaroteneMcgPer100g = (map["betaCaroteneMcgPer100g"] as? Number)?.toDouble()
             )
         }
     }
@@ -388,6 +397,11 @@ data class NutritionDay(
     val date: String = todayIso(),
     val waterMl: Int = 0,
     val items: List<LoggedFoodItem> = emptyList(),
+    val steps: Int = 0,
+    val stepTarget: Int = StepsBurnEngine.DEFAULT_STEP_TARGET,
+    val extraCardioKcal: Int = 0,
+    val stepBufferFactor: Double = StepsBurnEngine.DEFAULT_BUFFER_FACTOR,
+    val kcalPerStepOverride: Double = 0.0,
     val createdAt: Timestamp? = null,
     val updatedAt: Timestamp? = null
 ) {
@@ -396,6 +410,11 @@ data class NutritionDay(
         "date" to date,
         "waterMl" to waterMl.coerceIn(0, 20000),
         "items" to items.take(100).map { it.toMap() },
+        "steps" to steps.coerceIn(0, 150000),
+        "stepTarget" to stepTarget.coerceIn(1000, 50000),
+        "extraCardioKcal" to extraCardioKcal.coerceIn(0, 5000),
+        "stepBufferFactor" to stepBufferFactor.coerceIn(0.0, 1.0),
+        "kcalPerStepOverride" to kcalPerStepOverride.coerceIn(0.0, 0.2),
         "createdAt" to FieldValue.serverTimestamp(),
         "updatedAt" to FieldValue.serverTimestamp()
     )
@@ -404,6 +423,11 @@ data class NutritionDay(
         "date" to date,
         "waterMl" to waterMl.coerceIn(0, 20000),
         "items" to items.take(100).map { it.toMap() },
+        "steps" to steps.coerceIn(0, 150000),
+        "stepTarget" to stepTarget.coerceIn(1000, 50000),
+        "extraCardioKcal" to extraCardioKcal.coerceIn(0, 5000),
+        "stepBufferFactor" to stepBufferFactor.coerceIn(0.0, 1.0),
+        "kcalPerStepOverride" to kcalPerStepOverride.coerceIn(0.0, 0.2),
         "updatedAt" to FieldValue.serverTimestamp()
     )
 
@@ -418,6 +442,14 @@ data class NutritionDay(
                 date = (data["date"] as? String) ?: doc.id,
                 waterMl = (data["waterMl"] as? Number)?.toInt() ?: 0,
                 items = rawItems.mapNotNull { (it as? Map<*, *>)?.let(LoggedFoodItem::fromMap) },
+                steps = (data["steps"] as? Number)?.toInt()?.coerceIn(0, 150000) ?: 0,
+                stepTarget = (data["stepTarget"] as? Number)?.toInt()?.coerceIn(1000, 50000)
+                    ?: StepsBurnEngine.DEFAULT_STEP_TARGET,
+                extraCardioKcal = (data["extraCardioKcal"] as? Number)?.toInt()?.coerceIn(0, 5000) ?: 0,
+                stepBufferFactor = (data["stepBufferFactor"] as? Number)?.toDouble()?.coerceIn(0.0, 1.0)
+                    ?: StepsBurnEngine.DEFAULT_BUFFER_FACTOR,
+                kcalPerStepOverride = (data["kcalPerStepOverride"] as? Number)?.toDouble()?.coerceIn(0.0, 0.2)
+                    ?: 0.0,
                 createdAt = doc.getTimestamp("createdAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE),
                 updatedAt = doc.getTimestamp("updatedAt", DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
             )
